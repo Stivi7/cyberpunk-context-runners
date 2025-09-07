@@ -1,0 +1,13 @@
+```yaml
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*", "!packages/scripts/**"],
+      "outputs": ["build/**"]
+    }
+  }
+}
+```
