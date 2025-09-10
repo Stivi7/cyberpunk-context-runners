@@ -1,203 +1,284 @@
-# ContextRunners - Cyberpunk Development System
+# Cyberpunk Context Runners — Agent System & CLI
 
-A structured agent system for software development using functional programming patterns and AWS infrastructure.
+A structured, composable agent system that turns business requirements into production‑ready software. The agents are stack‑agnostic and can be configured for any language or technology stack while maintaining consistent workflow and quality standards.
 
-## Overview
+## Quick Start
 
-This system provides 7 specialized agents that work together to transform business requirements into production-ready code:
-
-- **The Nexus** - Creates Product Requirement Prompts (PRPs) from business needs
-- **The Mind** - Designs technical architecture and system plans
-- **The Interrogator** - Reviews and validates plans for completeness
-- **The Fragmenter** - Breaks down plans into executable development tasks
-- **The Coder** - Implements code using functional programming patterns
-- **The Gatekeeper** - Reviews code quality and validates implementations
-- **The Grid Master** - Manages infrastructure and deployment pipelines
-
-## Setup Instructions
-
-### 1. Copy Agent Definitions
-
-Copy the `agents/` directory to your project root or a designated location:
+### 1. Install the CLI
 
 ```bash
-cp -r agents/ /path/to/your/project/
+# Download the repository
+curl -L https://github.com/Stivi7/cyberpunk-context-runners/archive/main.zip -o cyberpunk-context-runners.zip
+unzip cyberpunk-context-runners.zip
+cd cyberpunk-context-runners-main
+
+# Add to your PATH (choose one method)
+# Method 1: Add to PATH in your shell profile
+echo 'export PATH="$PATH:$(pwd)"' >> ~/.zshrc  # for zsh
+echo 'export PATH="$PATH:$(pwd)"' >> ~/.bashrc # for bash
+source ~/.zshrc  # or ~/.bashrc
+
+# Method 2: Create symlink to local bin (if ~/bin is in PATH)
+mkdir -p ~/bin
+ln -sf "$(pwd)/cyberpunk" ~/bin/cyberpunk
+
+# Method 3: Copy to system-wide location (requires sudo)
+sudo cp cyberpunk /usr/local/bin/cyberpunk
 ```
 
-### 2. Configure Language and Framework Settings
-
-Replace the configuration placeholders in all agent files with your project-specific values:
-
-#### Language Configuration
-- `{configured_language}` → Your programming language (e.g., `typescript`, `python`, `go`)
-- `{configured_frontend_framework}` → Your frontend framework (e.g., `react`, `vue`, `svelte`)
-- `{configured_test_framework}` → Your testing framework (e.g., `jest`, `vitest`, `pytest`)
-
-#### Build Tools Configuration
-- `{configured_package_manager}` → Your package manager (e.g., `npm`, `pnpm`, `yarn`)
-- `{configured_monorepo_runner}` → Your monorepo tool (e.g., `turbo`, `nx`, `lerna`)
-- `{configured_lint_command}` → Your linting command (e.g., `lint`, `eslint`)
-- `{configured_format_command}` → Your formatting command (e.g., `format`, `prettier`)
-- `{configured_test_command}` → Your test command (e.g., `test`, `test:unit`)
-- `{configured_build_command}` → Your build command (e.g., `build`, `compile`)
-- `{configured_audit_command}` → Your security audit command (e.g., `audit`, `security-check`)
-
-### 3. Project Structure Configuration
-
-Update directory placeholders:
-- `{project-name}` → Your actual project name
-- `{app_directory}` → Your application directory structure
-
-### 4. Example Configuration Script
-
-Create a setup script to automate the configuration:
+### 2. Scaffold Your Project
 
 ```bash
-#!/bin/bash
-# setup-agents.sh
+# Navigate to your project directory
+cd /path/to/your/project
 
-PROJECT_NAME="your-project-name"
-LANGUAGE="typescript"
-FRONTEND_FRAMEWORK="react"
-TEST_FRAMEWORK="jest"
-PACKAGE_MANAGER="npm"
-
-# Replace placeholders in all agent files
-find agents/ -name "*.md" -exec sed -i "s/{configured_language}/$LANGUAGE/g" {} \;
-find agents/ -name "*.md" -exec sed -i "s/{configured_frontend_framework}/$FRONTEND_FRAMEWORK/g" {} \;
-find agents/ -name "*.md" -exec sed -i "s/{configured_test_framework}/$TEST_FRAMEWORK/g" {} \;
-find agents/ -name "*.md" -exec sed -i "s/{configured_package_manager}/$PACKAGE_MANAGER/g" {} \;
-find agents/ -name "*.md" -exec sed -i "s/{project-name}/$PROJECT_NAME/g" {} \;
-
-echo "Agent configuration completed for $PROJECT_NAME"
+# Initialize cyberpunk structure
+cyberpunk init
 ```
 
-### 5. Create Project-Specific Examples
-
-Create an `examples/` directory structure for your project:
-
+This creates:
 ```
-examples/
-├── infrastructure/          # AWS CloudFormation templates
-│   ├── lambda-api-stack.md
-│   ├── dynamodb-stack.md
-│   └── deployment-scripts.md
-├── PRPs/                   # Product Requirement Prompts
-│   └── your-feature.md
-└── configuration/          # Project-specific configs
-    ├── database-tables/
-    ├── common-packages/
-    └── apps/
+your-project/
+├── agents/              # Agent definitions
+├── examples/            # Usage examples
+├── PRPs/                # Product Requirement Prompts
+├── plans/               # Technical plans
+├── tasks/               # Task breakdowns
+└── .cursor/rules/       # Cursor IDE rules
 ```
 
-### 6. Database Documentation
+## CLI Usage
 
-Document your DynamoDB tables in `examples/database-tables/`:
-- Entity relationships and access patterns
-- Table schemas and indexes
-- Query patterns and performance considerations
-
-### 7. Package Documentation
-
-Document your shared libraries in `examples/common-packages/`:
-- Authentication utilities
-- AWS integration helpers
-- Database access libraries
-- Utility functions
-
-## Usage Workflow
-
-### 1. Requirements Gathering
-Start with **The Nexus** to create a PRP from business requirements:
-```
-Input: Raw business requirements
-Output: Structured Product Requirement Prompt
+```bash
+cyberpunk init [OPTIONS]
 ```
 
-### 2. Technical Planning
-Use **The Mind** to design system architecture:
-```
-Input: PRP from The Nexus
-Output: Technical architecture and implementation plan
+### Options
+- `--dry-run`     Preview what will be created without making changes
+- `--force`       Overwrite existing files without prompting
+- `--help`        Show help message
+- `--version`     Show version information
+
+### Examples
+
+```bash
+# Basic initialization
+cyberpunk init
+
+# Preview what will be created
+cyberpunk init --dry-run
+
+# Force overwrite existing files
+cyberpunk init --force
 ```
 
-### 3. Plan Validation
-**The Interrogator** reviews and validates the plan:
-```
-Input: Technical plan from The Mind
-Output: Approved plan or revision requests
+## The Agent System
+
+The cyberpunk agent system consists of 7 specialized agents that work together to transform business requirements into production-ready code:
+
+### 🔄 **Core Workflow Agents**
+- **The Operator** — Analyzes existing projects and generates customized examples and standards
+- **The Nexus** — Creates Product Requirement Prompts (PRPs) from business needs
+- **The Mind** — Designs technical architecture and phased implementation plans
+- **The Interrogator** — Reviews and validates plans for completeness and risk
+- **The Fragmenter** — Breaks plans into executable epics, stories, and tasks
+
+### ⚙️ **Implementation Agents**
+- **The Coder** — Implements code using functional programming principles
+- **The Gatekeeper** — Reviews code quality and enforces standards
+- **The Grid Master** — Manages infrastructure and deployment pipelines
+
+### Agent Workflow
+
+```mermaid
+graph LR
+    A[Business Need] --> B[Nexus]
+    B --> C[Mind]
+    C --> D[Interrogator]
+    D --> E[Fragmenter]
+    E --> F[Coder]
+    F --> G[Gatekeeper]
+    F --> H[Grid Master]
+    G --> I[Production]
+    H --> I
 ```
 
-### 4. Task Breakdown
-**The Fragmenter** creates actionable development tasks:
+0. **Operator** → Project analysis → generates examples and standards
+1. **Nexus** → Creates PRP → save to `PRPs/[feature].md`
+2. **Mind** → Technical plan → save to `plans/[feature]-plan.md`
+3. **Interrogator** → Validates plan → approves or requests changes
+4. **Fragmenter** → Task breakdown → save to `tasks/[feature]/`
+5. **Coder** → Implements code + tests
+6. **Grid Master** → Infrastructure & deployment
+7. **Gatekeeper** → Final review & approval
+
+## Agent Invocation
+
+After scaffolding with `cyberpunk init`, use these commands in your AI editor (e.g., Cursor):
+
+### Quick Commands
+- `operator: [scan/analyze project]` → Analyze project and generate standards
+- `nexus: [requirements]` → Create Product Requirement Prompt
+- `mind: [prp-file]` → Create technical plan from PRP
+- `interrogator: [plan-file]` → Review and validate plan
+- `fragmenter: [plan-file]` → Break plan into executable tasks
+- `coder: [task]` → Implement feature with tests
+- `grid-master: [infrastructure-task]` → Handle DevOps and infrastructure
+- `gatekeeper: [code/files]` → Review code quality and approve
+
+### Full Command Format
+- **"Act as Operator"** → Read `agents/operator.md` → Analyze project and generate examples/standards
+- **"Act as Nexus"** → Read `agents/nexus.md` → Create Product Requirement Prompts
+- **"Act as Mind"** → Read `agents/mind.md` → Generate technical plans and architecture
+- **"Act as Interrogator"** → Read `agents/interrogator.md` → Review and validate plans
+- **"Act as Fragmenter"** → Read `agents/fragmenter.md` → Break plans into tasks
+- **"Act as Coder"** → Read `agents/coder.md` → Implement features with functional patterns
+- **"Act as Grid Master"** → Read `agents/grid-master.md` → Handle infrastructure and DevOps
+- **"Act as Gatekeeper"** → Read `agents/gatekeeper.md` → Review code quality and approve
+
+### Example Workflow
+
 ```
-Input: Approved plan from The Interrogator
-Output: Granular development tasks with dependencies
+# Step 0: Analyze project (initial setup)
+User: "operator: scan project and generate standards"
+AI: [Becomes The Operator, analyzes project structure and creates examples]
+
+# Step 1: Create requirements
+User: "nexus: Build a real-time chat application with WebSocket support"
+AI: [Becomes The Nexus, creates comprehensive PRP]
+
+# Step 2: Design architecture  
+User: "mind: PRPs/chat-app.md"
+AI: [Becomes The Mind, creates technical architecture]
+
+# Step 3: Review plan
+User: "interrogator: plans/chat-app-plan.md"
+AI: [Becomes The Interrogator, reviews plan and provides feedback]
+
+# Step 4: Break into tasks
+User: "fragmenter: plans/chat-app-plan.md"
+AI: [Becomes The Fragmenter, creates detailed task breakdown]
+
+# Step 5: Implement features
+User: "coder: Implement WebSocket connection handler"
+AI: [Becomes The Coder, writes functional TypeScript code and tests]
+
+# Step 6: Infrastructure
+User: "grid-master: Setup AWS infrastructure for chat app"
+AI: [Becomes The Grid Master, creates CloudFormation templates]
+
+# Step 7: Final review
+User: "gatekeeper: Review the chat application code"
+AI: [Becomes The Gatekeeper, performs quality review]
 ```
 
-### 5. Implementation
-**The Coder** implements the actual code:
-```
-Input: Development tasks from The Fragmenter
-Output: Functional code with comprehensive tests
-```
+## Project-Specific Setup
 
-### 6. Quality Assurance
-**The Gatekeeper** reviews code quality:
-```
-Input: Code and tests from The Coder
-Output: Approval or revision requests
-```
+After running `cyberpunk init`, the agents are ready to use with their default configuration. For project-specific customization:
 
-### 7. Infrastructure & Deployment
-**The Grid Master** handles infrastructure and deployment:
+### Use The Operator (Recommended)
+The system includes The Operator agent that can analyze your project and generate language-specific examples:
+
 ```
-Input: Infrastructure requirements
-Output: CloudFormation templates and deployment pipelines
+User: "operator: scan project and generate standards"
+# or
+User: "Act as Operator" → analyze current project structure and generate customized examples
 ```
 
-## Functional Programming Principles
+This will:
+- Detect your project's language and framework
+- Generate relevant code examples in the `examples/` directory
+- Customize agent references for your specific stack
+- Set up appropriate testing and infrastructure patterns
 
-All agents follow these core principles:
-- **Pure Functions** - No side effects, predictable outputs
-- **Immutability** - Data structures are never modified in place
-- **Function Composition** - Complex operations built from simple functions
-- **Error Handling** - Result types instead of exceptions
-- **Type Safety** - Strong typing where language supports it
+### Manual Customization
+You can also manually edit the agent files in `agents/` to:
+- Update technology references (e.g., specify React instead of generic frontend)
+- Add project-specific quality standards
+- Include custom infrastructure patterns
+- Reference your preferred testing frameworks
 
-## Quality Standards
+## Core Principles
 
-### Code Quality Gates
-- Linting with functional programming rules
-- Code formatting validation
-- Security vulnerability scanning
-- Build verification
-- Test coverage ≥95%
+All agents follow these functional programming principles:
 
-### Testing Requirements
-- Unit tests for all pure functions (100% coverage)
-- Integration tests for AWS services
-- Component tests for UI elements
+### 📝 **Code Quality**
+- Pure functions and explicit data flow
+- Immutability by default
+- Function composition over inheritance
+- Result/Either types instead of exceptions
+- Strong typing where available
+
+### 🔍 **Quality Standards**
+- Lint, format, and build gates must pass
+- Security scanning in CI/CD
+- Test coverage ≥ 95%
 - Property-based testing where applicable
+- The Gatekeeper enforces these standards
 
-## AWS Integration
+### 📋 **File Organization**
+```
+project/
+├── PRPs/[feature-name].md           # Product requirements
+├── plans/[feature-name]-plan.md     # Technical plans
+├── tasks/[feature-name]/            # Task breakdowns
+├── agents/*.md                      # Agent definitions
+└── examples/                        # Examples and references
+```
 
-The system is designed for AWS-first development:
-- Lambda functions for serverless compute
-- DynamoDB for data persistence
-- API Gateway for REST endpoints
-- CloudFormation for infrastructure as code
-- CloudWatch for monitoring and logging
+## Advanced Usage
+
+### Cursor IDE Integration
+The system includes Cursor IDE rules in `.cursor/rules/rules.mdc` that:
+- Configure TypeScript-first development patterns
+- Set up `pnpm` as the preferred package manager
+- Enforce functional programming principles
+- Enable single-purpose functions and event-driven patterns
+
+### Multi-Project Setup
+For teams working on multiple projects:
+```bash
+# Install globally
+sudo cp cyberpunk /usr/local/bin/cyberpunk
+
+# Initialize in each project
+cd project-1 && cyberpunk init
+cd project-2 && cyberpunk init --force  # overwrite if needed
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**"Templates directory not found"**
+- Ensure you're running the script from the cyberpunk-context-runners directory
+- Or use the full path: `/path/to/cyberpunk-context-runners/cyberpunk init`
+
+**"Permission denied"**
+- Make sure the script is executable: `chmod +x cyberpunk`
+- Or run with bash: `bash cyberpunk init`
+
+**"Command not found"**
+- Check that the directory is in your PATH: `echo $PATH`
+- Try using the full path to the script
+- Restart your terminal after modifying PATH
 
 ## Contributing
 
-When adding new agents or modifying existing ones:
-1. Maintain the cyberpunk naming convention
-2. Follow the structured input/output format
+When adding or modifying agents:
+1. Maintain the cyberpunk naming/theme
+2. Keep structured inputs/outputs in each agent file
 3. Include validation criteria and interaction patterns
-4. Provide configuration examples
-5. Keep functional programming principles central
+4. Provide example usage or references
+5. Preserve functional programming principles
+6. Update templates and test the CLI
 
-## Support
+## License
 
-For issues or questions about the agent system, refer to your project's specific configuration and examples directory.
+See [LICENSE](LICENSE) for details.
+
+---
+
+**Ready to build the future? 🤖✨**
+
+`cyberpunk init` and let the agents guide your development journey.

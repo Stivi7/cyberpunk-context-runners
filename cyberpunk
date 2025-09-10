@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+
+# Cyberpunk CLI - Agent Structure Scaffolding Tool
+# Version: 0.1.0 (MVP)
+
+set -euo pipefail
+
+# Script configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
+VERSION="0.1.0"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Directory structure to create
+DIRECTORIES=(
+    "agents"
+    "examples"
+    "PRPs"
+    "plans"
+    "tasks"
+    ".cursor/rules"
+)
+
+# Template mappings: "template_path:destination_path"
+TEMPLATE_MAPPINGS=(
+    "agents:agents"
+    "examples:examples"
+    "PRPs:PRPs"
+    "plans:plans"
+    "tasks:tasks"
+    ".cursor/rules/rules.mdc:.cursor/rules/rules.mdc"
+)
+
+# Global flags
+DRY_RUN=false
+FORCE=false
+
+# Logging functions
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+# Usage information
+show_usage() {
+    cat << EOF
+Cyberpunk CLI v$VERSION
+
+USAGE:
+    cyberpunk init [OPTIONS]
+
+DESCRIPTION:
+    Scaffold cyberpunk agent structure in the current directory.
+    Copies immutable templates to create the standard directory structure.
+
+OPTIONS:
+    --dry-run       Show planned operations without making changes
+    --force         Overwrite existing files without prompting
+    -h, --help      Show this help message
+    -v, --version   Show version information
+
+EXAMPLES:
+    cyberpunk init                    # Initialize with default behavior
+    cyberpunk init --dry-run          # Preview what will be created
+    cyberpunk init --force            # Overwrite existing files
+
+After initialization, use the init agent for project-specific setup and 
+language-specific examples.
+EOF
+}
+
+# Version information
+show_version() {
+    echo "Cyberpunk CLI v$VERSION"
+}
+
+# Check if templates directory exists
+validate_templates() {
+    if [[ ! -d "$TEMPLATES_DIR" ]]; then
+        log_error "Templates directory not found: $TEMPLATES_DIR"
+        log_error "Please ensure you're running the script from the cyberpunk-context-runners repository."
+        return 1
+    fi
+    
+    log_info "Using templates from: $TEMPLATES_DIR"
+    return 0
+}
+
+# Create directory if it doesn't exist
+create_directory() {
+    local dir="$1"
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ ! -d "$dir" ]]; then
+            log_info "[DRY-RUN] Would create directory: $dir"
+        else
+            log_info "[DRY-RUN] Directory exists: $dir"
+        fi
+        return 0
+    fi
+    
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir"
+        log_success "Created directory: $dir"
+    else
+        log_info "Directory exists: $dir"
+    fi
+}
+
+# Create .gitkeep file in directory
+create_gitkeep() {
+    local dir="$1"
+    local gitkeep_path="$dir/.gitkeep"
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[DRY-RUN] Would create .gitkeep in: $dir"
+        return 0
+    fi
+    
+    if [[ ! -f "$gitkeep_path" ]]; then
+        touch "$gitkeep_path"
+        log_success "Created .gitkeep in: $dir"
+    fi
+}
+
+# Copy file with conflict handling
+copy_file() {
+    local src="$1"
+    local dest="$2"
+    
+    # Create destination directory if needed
+    local dest_dir="$(dirname "$dest")"
+    create_directory "$dest_dir"
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -f "$dest" ]]; then
+            if [[ "$FORCE" == true ]]; then
+                log_info "[DRY-RUN] Would overwrite: $dest"
+            else
+                log_warning "[DRY-RUN] Would skip (file exists): $dest"
+            fi
+        else
+            log_info "[DRY-RUN] Would copy: $src -> $dest"
+        fi
+        return 0
+    fi
+    
+    # Handle existing files
+    if [[ -f "$dest" ]]; then
+        if [[ "$FORCE" == true ]]; then
+            cp "$src" "$dest"
+            log_success "Overwritten: $dest"
+        else
+            log_warning "Skipped (file exists): $dest"
+        fi
+    else
+        cp "$src" "$dest"
+        log_success "Copied: $dest"
+    fi
+}
+
+# Copy directory recursively
+copy_directory() {
+    local src="$1"
+    local dest="$2"
+    
+    if [[ ! -d "$src" ]]; then
+        log_warning "Template directory not found: $src"
+        create_directory "$dest"
+        create_gitkeep "$dest"
+        return 0
+    fi
+    
+    create_directory "$dest"
+    
+    # Check if source directory is empty
+    if [[ -z "$(ls -A "$src" 2>/dev/null)" ]]; then
+        log_info "Template directory is empty: $src"
+        create_gitkeep "$dest"
+        return 0
+    fi
+    
+    # Copy all files and subdirectories
+    local file_count=0
+    while IFS= read -r -d '' file; do
+        local rel_path="${file#$src/}"
+        local dest_path="$dest/$rel_path"
+        
+        if [[ -f "$file" ]]; then
+            copy_file "$file" "$dest_path"
+            ((file_count++))
+        elif [[ -d "$file" ]]; then
+            create_directory "$dest_path"
+        fi
+    done < <(find "$src" -mindepth 1 -print0 2>/dev/null || true)
+    
+    if [[ $file_count -eq 0 ]]; then
+        create_gitkeep "$dest"
+    fi
+}
+
+# Main initialization function
+init_project() {
+    log_info "Initializing cyberpunk agent structure..."
+    
+    if ! validate_templates; then
+        return 1
+    fi
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "=== DRY RUN MODE - NO FILES WILL BE CREATED ==="
+    fi
+    
+    # Create base directories
+    for dir in "${DIRECTORIES[@]}"; do
+        create_directory "$dir"
+    done
+    
+    # Process template mappings
+    for mapping in "${TEMPLATE_MAPPINGS[@]}"; do
+        local template_path="${mapping%%:*}"
+        local dest_path="${mapping##*:}"
+        local full_template_path="$TEMPLATES_DIR/$template_path"
+        
+        if [[ -f "$full_template_path" ]]; then
+            # Single file mapping
+            copy_file "$full_template_path" "$dest_path"
+        elif [[ -d "$full_template_path" ]]; then
+            # Directory mapping
+            copy_directory "$full_template_path" "$dest_path"
+        else
+            log_error "Template not found: $full_template_path"
+            continue
+        fi
+    done
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "=== END DRY RUN - NO CHANGES MADE ==="
+    else
+        log_success "Cyberpunk agent structure initialized successfully!"
+        echo
+        log_info "Next steps:"
+        log_info "1. Review the generated directory structure"
+        log_info "2. Use the init agent for project-specific setup and language-specific examples"
+        log_info "3. Customize agents and templates according to your project needs"
+    fi
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            init)
+                # Command already handled by main logic
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            --force)
+                FORCE=true
+                shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            -v|--version)
+                show_version
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Main function
+main() {
+    # Check if no arguments provided
+    if [[ $# -eq 0 ]]; then
+        show_usage
+        exit 1
+    fi
+    
+    # Check if first argument is init
+    if [[ "$1" != "init" ]]; then
+        if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+            show_usage
+            exit 0
+        elif [[ "$1" == "-v" ]] || [[ "$1" == "--version" ]]; then
+            show_version
+            exit 0
+        else
+            log_error "Unknown command: $1"
+            log_error "Available commands: init"
+            echo
+            show_usage
+            exit 1
+        fi
+    fi
+    
+    # Parse remaining arguments
+    parse_args "$@"
+    
+    # Execute initialization
+    init_project
+}
+
+# Run main function with all arguments
+main "$@"
