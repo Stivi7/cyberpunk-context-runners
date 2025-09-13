@@ -221,22 +221,7 @@ project/
 ## Advanced Usage
 
 ### Cursor IDE Integration
-The system includes Cursor IDE rules in `.cursor/rules/rules.mdc` that:
-- Configure TypeScript-first development patterns
-- Set up `pnpm` as the preferred package manager
-- Enforce functional programming principles
-- Enable single-purpose functions and event-driven patterns
-
-### Multi-Project Setup
-For teams working on multiple projects:
-```bash
-# Install globally
-sudo cp cyberpunk /usr/local/bin/cyberpunk
-
-# Initialize in each project
-cd project-1 && cyberpunk init
-cd project-2 && cyberpunk init --force  # overwrite if needed
-```
+The system includes Cursor IDE rules in `.cursor/rules/rules.mdc` that configures the agent behaviour and how to address them in the cursor chat.
 
 ## Troubleshooting
 
