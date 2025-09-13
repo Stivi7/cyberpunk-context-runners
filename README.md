@@ -7,23 +7,15 @@ A structured, composable agent system that turns business requirements into prod
 ### 1. Install the CLI
 
 ```bash
-# Download the repository
-curl -L https://github.com/Stivi7/cyberpunk-context-runners/archive/main.zip -o cyberpunk-context-runners.zip
-unzip cyberpunk-context-runners.zip
-cd cyberpunk-context-runners-main
+# Clone the repository
+git clone https://github.com/Stivi7/cyberpunk-context-runners.git
+cd cyberpunk-context-runners
 
-# Add to your PATH (choose one method)
-# Method 1: Add to PATH in your shell profile
-echo 'export PATH="$PATH:$(pwd)"' >> ~/.zshrc  # for zsh
-echo 'export PATH="$PATH:$(pwd)"' >> ~/.bashrc # for bash
-source ~/.zshrc  # or ~/.bashrc
+# Install the cyberpunk command (single command setup)
+echo "export PATH=\"$(pwd):\$PATH\"" >> ~/.zshrc && source ~/.zshrc
 
-# Method 2: Create symlink to local bin (if ~/bin is in PATH)
-mkdir -p ~/bin
-ln -sf "$(pwd)/cyberpunk" ~/bin/cyberpunk
-
-# Method 3: Copy to system-wide location (requires sudo)
-sudo cp cyberpunk /usr/local/bin/cyberpunk
+# Verify installation:
+cyberpunk --version
 ```
 
 ### 2. Scaffold Your Project
