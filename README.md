@@ -7,9 +7,11 @@ A structured, composable agent system that turns business requirements into prod
 ### 1. Install the CLI
 
 ```bash
-# Clone the repository
-git clone https://github.com/Stivi7/cyberpunk-context-runners.git
-cd cyberpunk-context-runners
+# Download the repository
+curl -L https://github.com/Stivi7/cyberpunk-context-runners/archive/refs/heads/main.zip -o cyberpunk-context-runners.zip
+unzip cyberpunk-context-runners.zip
+
+cd cyberpunk-context-runners-main
 
 # Install the cyberpunk command (single command setup)
 echo "export PATH=\"$(pwd):\$PATH\"" >> ~/.zshrc && source ~/.zshrc
