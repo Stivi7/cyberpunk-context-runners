@@ -1,3 +1,8 @@
+---
+description: Code Reviewer - Reviews code quality and enforces functional, security, and quality standards
+alwaysApply: false
+---
+
 # The Gatekeeper - Code Reviewer
 
 ## ROLE
@@ -39,4 +44,4 @@
 - Performance expectation assumptions
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md

@@ -38,7 +38,9 @@ your-project/
 ├── PRPs/                # Product Requirement Prompts
 ├── plans/               # Technical plans
 ├── tasks/               # Task breakdowns
-└── .cursor/rules/       # Cursor IDE rules
+├── .cursor/
+│   ├── rules/           # Cursor IDE rules
+│   └── agents/          # Standalone Cursor agent configurations
 ```
 
 ## CLI Usage
@@ -223,7 +225,26 @@ project/
 ## Advanced Usage
 
 ### Cursor IDE Integration
-The system includes Cursor IDE rules in `.cursor/rules/rules.mdc` that configures the agent behaviour and how to address them in the cursor chat.
+
+The system provides two ways to use agents in Cursor:
+
+#### 1. Standalone Agents (Recommended)
+After running `cyberpunk init`, each agent is available as a standalone Cursor agent in `.cursor/agents/`. These agents:
+- Appear in Cursor's agent selector
+- Can be invoked directly without typing "Act as..."
+- Have their own context and instructions
+- Can be enabled/disabled per project
+
+**Usage:**
+- Open Cursor IDE
+- Select an agent from the agent menu (e.g., "The Operator", "The Nexus")
+- The agent will automatically read its definition and follow its protocols
+
+#### 2. Rules-Based Invocation
+The system also includes Cursor IDE rules in `.cursor/rules/rules.mdc` that configures agent behaviour for manual invocation:
+- Use commands like `"Act as Operator"` or `"operator: scan project"`
+- Agents read their definitions from `agents/[agent-name].md`
+- Follow the workflow process defined in the rules file
 
 ## Troubleshooting
 

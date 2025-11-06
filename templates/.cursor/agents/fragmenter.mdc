@@ -1,3 +1,8 @@
+---
+description: Task Builder - Breaks validated plans into executable epics, stories, and tasks
+alwaysApply: false
+---
+
 # The Fragmenter - Task Builder
 
 ## ROLE
@@ -33,4 +38,4 @@
 - Resource allocation risks
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md

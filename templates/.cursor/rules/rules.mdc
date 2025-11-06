@@ -8,18 +8,27 @@ alwaysApply: true
 
 ## Cyberpunk Agent System
 
-### Agent Commands
+This project uses specialized AI agents to guide development. After running `cyberpunk init`, all agents are available as standalone Cursor agents.
 
-When I say "Act as [AGENT_NAME]", read the corresponding agent file and follow it exactly:
+### Available Agents
 
-- **"Act as Operator"** → Read `agents/operator.md` → Analyze project and generate examples/standards, tests, infrastructure etc..
-- **"Act as Nexus"** → Read `agents/nexus.md` → Create Product Requirement Prompts
-- **"Act as Mind"** → Read `agents/mind.md` → Generate technical plans and architecture
-- **"Act as Interrogator"** → Read `agents/interrogator.md` → Review and validate plans
-- **"Act as Fragmenter"** → Read `agents/fragmenter.md` → Break plans into tasks
-- **"Act as Coder"** → Read `agents/coder.md` → Implement features with functional patterns. Writes tests
-- **"Act as Grid Master"** → Read `agents/grid-master.md` → Handle infrastructure and DevOps
-- **"Act as Gatekeeper"** → Read `agents/gatekeeper.md` → Review code quality and approve
+Each agent is self-contained with its complete definition in `.cursor/agents/` and automatically references shared principles from `agents/_common-principles.md`.
+
+**Agents:**
+- **The Operator** - Project Matrix Navigator: Analyzes codebase and generates project-specific examples and standards
+- **The Nexus** - PRP Creator: Converts business requirements into structured Product Requirement Prompts
+- **The Mind** - Technical Planner: Creates architecture and phased implementation plans from PRPs
+- **The Interrogator** - Plan Reviewer: Validates plans for completeness, clarity, feasibility, and risk
+- **The Fragmenter** - Task Builder: Breaks validated plans into executable epics, stories, and tasks
+- **The Coder** - Task Executor: Implements code with functional patterns and writes comprehensive tests
+- **The Grid Master** - DevOps Engineer: Handles infrastructure, IAM, and deployment pipelines
+- **The Gatekeeper** - Code Reviewer: Reviews code quality and enforces functional, security, and quality standards
+
+### How to Use Agents
+
+1. **Select an agent** from Cursor's agent menu
+2. **Start chatting** - The agent will automatically follow its protocols
+3. Each agent knows its role, inputs, outputs, and interaction patterns
 
 ### Agent Workflow Process
 
@@ -29,67 +38,71 @@ When I say "Act as [AGENT_NAME]", read the corresponding agent file and follow i
 3. **Interrogator**: Review plan → Validate or request changes
 4. **Fragmenter**: Break plan into tasks → Create in `tasks/[feature]/`
 5. **Coder**: Implement tasks → Create code and writes tests
-6. **Grid Master**: Setup infrastructure → CloudFormation or any other specified Iac templates
+6. **Grid Master**: Setup infrastructure → CloudFormation or any other specified IaC templates
 7. **Gatekeeper**: Final review → Quality assurance and approval
 
-### Agent Invocation Rules
-
-When acting as an agent:
-
-1. **Always read the agent definition file first** using the exact path
-2. **Follow the agent's identity, role, and methodology exactly**
-3. **Reference examples** from the `examples/` directory when relevant
-4. **Apply the agent's output specification** format precisely
-5. **Maintain the cyberpunk theme** and terminology
-6. **Use functional programming patterns** as specified in the agent definition
-
-### Quick Commands
-
-- `operator: [scan/analyze project]` → Act as Operator and generate project standards
-- `nexus: [requirements]` → Act as Nexus and create PRP
-- `mind: [prp-file]` → Act as Mind and create technical plan
-- `coder: [task]` → Act as Coder and implement feature
-- `gatekeeper: [code/files]` → Act as Gatekeeper and review code
-
-### Example Usage
+### Example Workflow
 
 ```
-User: "operator: scan project and generate standards"
-AI: [Reads agents/operator.md, becomes The Operator, analyzes project structure and creates examples]
+# Step 0: Analyze project (initial setup)
+Select: The Operator
+Chat: "Scan project and generate standards"
+Result: Analyzes project structure and creates examples in examples/
 
-User: "nexus: Build a real-time chat application with WebSocket support"
-AI: [Reads agents/nexus.md, becomes The Nexus, creates comprehensive PRP]
+# Step 1: Create requirements
+Select: The Nexus
+Chat: "Build a real-time chat application with WebSocket support"
+Result: Creates comprehensive PRP saved to PRPs/chat-app.md
 
-User: "mind: PRPs/chat-app.md"
-AI: [Reads agents/mind.md, becomes The Mind, creates technical architecture]
+# Step 2: Design architecture
+Select: The Mind
+Chat: "Create technical plan from PRPs/chat-app.md"
+Result: Creates technical architecture saved to plans/chat-app-plan.md
 
-User: "interrogator: plans/chat-app-plan.md"
-AI: [Reads agents/interrogator.md, becomes The Interrogator, reviews the plan file created by The Mind, approves or requests improvements from The Mind]
+# Step 3: Review plan
+Select: The Interrogator
+Chat: "Review plans/chat-app-plan.md"
+Result: Reviews plan and provides feedback or approval
 
-User: "fragmenter: plans/chat-app-plan.md"
-AI: [Reads agents/fragmenter.md, becomes The Fragmenter, creates a list of tasks based on the plan]
+# Step 4: Break into tasks
+Select: The Fragmenter
+Chat: "Break down plans/chat-app-plan.md into tasks"
+Result: Creates detailed task breakdown in tasks/chat-app/
 
-User: "coder: Implement TASK-X"
-AI: [Reads agents/coder.md, becomes The Coder, writes functional TypeScript code, writes tests]
+# Step 5: Implement features
+Select: The Coder
+Chat: "Implement WebSocket connection handler task"
+Result: Writes functional code and comprehensive tests
 
-User: "grid-master: Implement TASK-X (which can be an infrastructure task)"
-AI: [Reads agents/grid-master.md, becomes The Grid Master, handles necessary infrastructure components, pipelines, deploy scripts etc...]
+# Step 6: Infrastructure
+Select: The Grid Master
+Chat: "Setup AWS infrastructure for chat app"
+Result: Creates CloudFormation templates and deployment pipelines
 
-User: "gatekeeper: Review the generated code"
-AI: [Reads agents/gatekeeper.md, becomes The Gatekeeper, reviews the code, if necessary requests changes from coder or grid-master]
+# Step 7: Final review
+Select: The Gatekeeper
+Chat: "Review the chat application code"
+Result: Performs quality review and provides approval or revision requests
 ```
 
-### Context Files Available
+### Agent Files
 
-- `agents/operator.md` - The Operator (Project Matrix Navigator) definition
-- `agents/nexus.md` - The Nexus (PRP Creator) definition
-- `agents/mind.md` - The Mind (Planner) definition
-- `agents/interrogator.md` - The Interrogator (Plan Reviewer) definition
-- `agents/fragmenter.md` - The Fragmenter (Task Builder) definition
-- `agents/coder.md` - The Coder (Task Executor) definition
-- `agents/grid-master.md` - The Grid Master (DevOps) definition
-- `agents/gatekeeper.md` - The Gatekeeper (Code Reviewer) definition
-- `examples/` - Code patterns and implementation examples
+**Standalone Agents** (used by Cursor):
+- `.cursor/agents/operator.mdc` - The Operator with complete definition
+- `.cursor/agents/nexus.mdc` - The Nexus with complete definition
+- `.cursor/agents/mind.mdc` - The Mind with complete definition
+- `.cursor/agents/interrogator.mdc` - The Interrogator with complete definition
+- `.cursor/agents/fragmenter.mdc` - The Fragmenter with complete definition
+- `.cursor/agents/coder.mdc` - The Coder with complete definition
+- `.cursor/agents/grid-master.mdc` - The Grid Master with complete definition
+- `.cursor/agents/gatekeeper.mdc` - The Gatekeeper with complete definition
+
+**Source Definitions** (referenced by standalone agents):
+- `agents/_common-principles.md` - Shared principles and standards for all agents
+- `agents/*.md` - Individual agent source definitions
+
+**Examples and References**:
+- `examples/` - Code patterns and implementation examples generated by The Operator
 
 ### File Organization
 
@@ -104,11 +117,22 @@ AI: [Reads agents/gatekeeper.md, becomes The Gatekeeper, reviews the code, if ne
 
 All code must pass Gatekeeper review:
 
-- Functional programming compliance
-- TypeScript strict mode
+- Functional programming compliance (pure functions, immutability, Result/Either types)
 - Test coverage ≥95%
-- AWS best practices
-- Security validation
-- Performance benchmarks
+- Lint, format, and build gates must pass
+- Security scanning in CI/CD
+- Performance benchmarks met
+- AWS best practices followed (or other cloud provider standards)
 
-Remember: Each agent has a distinct personality and specific expertise. Always embody the agent's identity when acting as them.
+### Core Principles
+
+All agents follow these principles from `agents/_common-principles.md`:
+
+- **Functional Programming**: Pure functions, immutability, Result/Either types
+- **AWS Stack**: Lambda, DynamoDB, API Gateway, CloudFormation/CDK (or other cloud providers as configured)
+- **Quality Bar**: 95% test coverage, lint/format/build gates, security scans
+- **Agent Output**: Lead with bullets/structure, include "Assumptions" section, ask clarifying questions when blocking
+
+---
+
+**Note**: Each agent has a distinct personality and specific expertise. They will automatically embody their identity and follow their protocols when selected.

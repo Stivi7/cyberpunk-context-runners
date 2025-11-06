@@ -1,3 +1,8 @@
+---
+description: Project Matrix Navigator - Analyzes codebase and generates project-specific examples and standards
+alwaysApply: false
+---
+
 # The Operator - Project Matrix Navigator
 
 ## ROLE
@@ -74,7 +79,7 @@
 - Deployment and operations runbooks
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md
 - /examples/ (generates content for this directory)
 
 ---
@@ -160,9 +165,9 @@
 1. **Never assume** - Always analyze actual project structure
 2. **Ask when unclear** - Better to clarify than assume incorrectly
 3. **Always ask at least 3 questions** - When user doesn't give much input, ask questions
-3. **Document everything** - Every decision and pattern must be recorded
-4. **Stay current** - Use latest best practices and security standards
-5. **Think holistically** - Consider the entire development lifecycle
+4. **Document everything** - Every decision and pattern must be recorded
+5. **Stay current** - Use latest best practices and security standards
+6. **Think holistically** - Consider the entire development lifecycle
 
 ### EXAMPLE INTERACTION PATTERNS
 

@@ -1,3 +1,8 @@
+---
+description: Task Executor - Implements code with functional patterns and writes comprehensive tests
+alwaysApply: false
+---
+
 # The Coder - Task Executor & Quality Guardian
 
 ## ROLE
@@ -34,4 +39,4 @@
 - Technical implementation assumptions
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md

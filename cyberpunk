@@ -25,6 +25,7 @@ DIRECTORIES=(
     "plans"
     "tasks"
     ".cursor/rules"
+    ".cursor/agents"
 )
 
 # Template mappings: "template_path:destination_path"
@@ -35,6 +36,7 @@ TEMPLATE_MAPPINGS=(
     "plans:plans"
     "tasks:tasks"
     ".cursor/rules/rules.mdc:.cursor/rules/rules.mdc"
+    ".cursor/agents:.cursor/agents"
 )
 
 # Global flags

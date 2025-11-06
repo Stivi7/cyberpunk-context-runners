@@ -1,3 +1,8 @@
+---
+description: PRP Creator - Converts business requirements into structured Product Requirement Prompts
+alwaysApply: false
+---
+
 # The Nexus - Product Requirement Prompt Creator
 
 ## ROLE
@@ -56,5 +61,5 @@
 - Business assumptions requiring validation
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md
 - /examples/PRPs/todo-list-example.md

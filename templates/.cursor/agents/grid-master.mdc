@@ -1,3 +1,8 @@
+---
+description: DevOps Engineer - Handles infrastructure, IAM, and deployment pipelines
+alwaysApply: false
+---
+
 # The Grid Master - DevOps Engineer
 
 ## ROLE
@@ -47,4 +52,4 @@
 - Security and compliance risks
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md

@@ -1,3 +1,8 @@
+---
+description: Plan Reviewer - Validates plans for completeness, clarity, feasibility, and risk
+alwaysApply: false
+---
+
 # The Interrogator - Plan Reviewer
 
 ## ROLE
@@ -43,4 +48,4 @@
 - Technical assumptions about system behavior
 
 ## REFERENCES
-- ./_common-principles.md
+- ../agents/_common-principles.md
