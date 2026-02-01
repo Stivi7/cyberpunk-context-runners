@@ -8,6 +8,10 @@ Create minimal, well-configured AWS Lambda stacks with proper IAM roles, environ
 - Setting up serverless infrastructure stacks
 - Defining Lambda roles and permissions
 - Configuring Lambda triggers and event sources
+- Setting up VPC-enabled Lambda functions
+- Creating Lambda functions with Function URLs for HTTP access
+- Configuring Dead Letter Queues for failed invocations
+- Using Lambda Layers for shared dependencies
 
 ## INPUTS
 - function_name (required) - Base name for the Lambda function
@@ -17,6 +21,13 @@ Create minimal, well-configured AWS Lambda stacks with proper IAM roles, environ
 - timeout_sec (optional) - Timeout in seconds, default: 30
 - environment_vars (optional) - Key-value map of environment variables
 - triggers (optional) - List of event sources: api_gateway, sqs, sns, s3, eventbridge
+- vpc_id (optional) - VPC ID for VPC-enabled functions
+- subnet_ids (optional) - List of subnet IDs for VPC configuration
+- security_group_id (optional) - Security group ID for VPC configuration
+- create_function_url (optional) - Create HTTP endpoint URL: `true` or `false`, default: false
+- create_dlq (optional) - Create Dead Letter Queue: `true` or `false`, default: false
+- layers (optional) - List of Lambda Layer ARNs to attach
+- provisioned_concurrency (optional) - Number of provisioned concurrent executions
 
 ## LAMBDA CONFIGURATION
 
@@ -49,6 +60,84 @@ Environment:
 ### Reserved Concurrent Executions (optional)
 ```yaml
 ReservedConcurrentExecutions: 100  # Limit max concurrent invocations
+```
+
+### Dead Letter Queue (DLQ)
+```yaml
+DeadLetterConfig:
+  TargetArn: !GetAtt LambdaDLQ.Arn
+
+LambdaDLQ:
+  Type: AWS::SQS::Queue
+  Properties:
+    QueueName: !Sub "${StackName}-${FunctionName}-dlq"
+    MessageRetentionPeriod: 1209600  # 14 days
+    KmsMasterKeyId: alias/aws/sqs  # Enable SSE
+```
+
+### VPC Configuration
+```yaml
+VpcConfig:
+  SubnetIds: !Ref PrivateSubnetIds
+  SecurityGroupIds:
+    - !Ref LambdaSecurityGroup
+
+LambdaSecurityGroup:
+  Type: AWS::EC2::SecurityGroup
+  Properties:
+    GroupDescription: Security group for Lambda function
+    VpcId: !Ref VpcId
+    SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
+```
+
+### Lambda Layers
+```yaml
+Layers:
+  - !Ref DependenciesLayer
+  - arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPythonV2:58
+
+DependenciesLayer:
+  Type: AWS::Lambda::LayerVersion
+  Properties:
+    LayerName: !Sub "${StackName}-${FunctionName}-deps"
+    Description: Shared dependencies layer
+    Content:
+      S3Bucket: !Ref LayerArtifactsBucket
+      S3Key: !Sub "layers/${FunctionName}/deps.zip"
+    CompatibleRuntimes:
+      - nodejs20.x
+      - python3.12
+    LicenseInfo: MIT
+```
+
+### Function URL (HTTP Endpoint)
+```yaml
+FunctionUrlConfig:
+  Type: AWS::Lambda::Url
+  Properties:
+    AuthType: AWS_IAM  # or NONE for public
+    TargetFunctionArn: !Ref MyFunction
+    Cors:
+      AllowOrigins:
+        - https://example.com
+      AllowMethods:
+        - GET
+        - POST
+      AllowHeaders:
+        - content-type
+      MaxAge: 86400
+
+FunctionUrlPermission:
+  Type: AWS::Lambda::Permission
+  Properties:
+    FunctionName: !Ref MyFunction
+    Action: lambda:InvokeFunctionUrl
+    Principal: "*"
+    FunctionUrlAuthType: NONE  # Match AuthType above
 ```
 
 ## IAM ROLE PATTERN
@@ -134,6 +223,58 @@ Parameters:
       - INFO
       - WARN
       - ERROR
+
+  CreateFunctionUrl:
+    Type: String
+    Description: Create Lambda Function URL
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  CreateDLQ:
+    Type: String
+    Description: Create Dead Letter Queue
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  VpcId:
+    Type: String
+    Description: VPC ID (optional, for VPC-enabled functions)
+    Default: ''
+
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: Private subnet IDs (optional, for VPC-enabled functions)
+    Default: ''
+
+  SecurityGroupId:
+    Type: String
+    Description: Security group ID (optional, for VPC-enabled functions)
+    Default: ''
+
+  LayerArns:
+    Type: CommaDelimitedList
+    Description: Lambda Layer ARNs to attach
+    Default: ''
+
+  ProvisionedConcurrency:
+    Type: Number
+    Description: Provisioned concurrent executions (0 to disable)
+    Default: 0
+    MinValue: 0
+```
+
+### Conditions
+```yaml
+Conditions:
+  CreateFunctionUrl: !Equals [!Ref CreateFunctionUrl, 'true']
+  CreateDLQ: !Equals [!Ref CreateDLQ, 'true']
+  UseVPC: !Not [!Equals [!Ref VpcId, '']]
+  HasLayers: !Not [!Equals [!Join [",", !Ref LayerArns], '']]
+  UseProvisionedConcurrency: !Not [!Equals [!Ref ProvisionedConcurrency, 0]]
 ```
 
 ## STACK OUTPUTS
@@ -157,6 +298,20 @@ Outputs:
     Value: !GetAtt LambdaExecutionRole.Arn
     Export:
       Name: !Sub "${StackName}-LambdaRoleArn"
+
+  FunctionUrl:
+    Description: Lambda function URL (if configured)
+    Condition: CreateFunctionUrl
+    Value: !GetAtt FunctionUrlConfig.FunctionUrl
+    Export:
+      Name: !Sub "${StackName}-LambdaUrl"
+
+  DLQArn:
+    Description: Dead Letter Queue ARN (if configured)
+    Condition: CreateDLQ
+    Value: !GetAtt LambdaDLQ.Arn
+    Export:
+      Name: !Sub "${StackName}-LambdaDLQArn"
 ```
 
 ## COMMON TRIGGER PATTERNS
