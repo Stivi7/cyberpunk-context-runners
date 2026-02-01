@@ -33,5 +33,10 @@
 ## Assumptions
 - Technical implementation assumptions
 
+## SKILLS
+- ./skills/testing/unit-testing-patterns.md
+- ./skills/testing/integration-testing.md
+- ./skills/programming/functional-programming.md
+
 ## REFERENCES
 - ./_common-principles.md

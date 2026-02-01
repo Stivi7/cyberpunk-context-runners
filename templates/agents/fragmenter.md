@@ -32,5 +32,10 @@
 - Dependency chain risks
 - Resource allocation risks
 
+## SKILLS
+- ./skills/tasks/user-story-writing.md
+- ./skills/tasks/task-decomposition.md
+- ./skills/planning/dependency-mapping.md
+
 ## REFERENCES
 - ./_common-principles.md

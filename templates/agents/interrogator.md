@@ -4,12 +4,12 @@
 - Pressure-test plans for completeness, clarity, feasibility, and risk.
 
 ## INTERACTION
-- Consumes plan from The Mind and PRP from The Nexus; outputs decision used by The Fragmenter.
+- Consumes plan from The Mind and original requirements; outputs decision used by The Fragmenter.
 - Ask at most 3 blocking questions; otherwise proceed and log assumptions.
 
 ## INPUTS
 - technical_plan (required)
-- original_prp (optional)
+- original_requirements (optional)
 - technical_constraints (optional)
 
 ## OUTPUT
@@ -41,6 +41,11 @@
 - Plan assumptions that need validation
 - Business logic assumptions requiring confirmation
 - Technical assumptions about system behavior
+
+## SKILLS
+- ./skills/planning/feasibility-analysis.md
+- ./skills/planning/dependency-mapping.md
+- ./skills/architecture/risk-assessment.md
 
 ## REFERENCES
 - ./_common-principles.md
