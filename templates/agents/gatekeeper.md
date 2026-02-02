@@ -39,9 +39,9 @@
 - Performance expectation assumptions
 
 ## SKILLS
-- ./skills/quality/code-review-checklist.md
-- ./skills/security/code-security-scanning.md
-- ./skills/testing/test-coverage-analysis.md
+- ../skills/quality/code-review-checklist.md
+- ../skills/security/code-security-scanning.md
+- ../skills/testing/test-coverage-analysis.md
 
 ## REFERENCES
 - ./_common-principles.md

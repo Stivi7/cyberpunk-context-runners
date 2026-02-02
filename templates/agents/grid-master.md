@@ -47,11 +47,11 @@
 - Security and compliance risks
 
 ## SKILLS
-- ./skills/infrastructure/cloudformation-stacks.md
-- ./skills/infrastructure/cicd-pipelines.md
-- ./skills/infrastructure/observability-setup.md
-- ./skills/security/iam-policy-design.md
-- ./skills/lambda.md
+- ../skills/infrastructure/cloudformation-stacks.md
+- ../skills/infrastructure/cicd-pipelines.md
+- ../skills/infrastructure/observability-setup.md
+- ../skills/security/iam-policy-design.md
+- ../skills/infrastructure/lambda.md
 
 ## REFERENCES
 - ./_common-principles.md

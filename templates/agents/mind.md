@@ -54,11 +54,11 @@
 - Performance assumptions and benchmarks
 
 ## SKILLS
-- ./skills/architecture/system-design.md
-- ./skills/architecture/risk-assessment.md
-- ./skills/data/dynamodb-design.md
-- ./skills/api/rest-api-design.md
-- ./skills/data/api-gateway-design.md
+- ../skills/architecture/system-design.md
+- ../skills/architecture/risk-assessment.md
+- ../skills/data/dynamodb-design.md
+- ../skills/api/rest-api-design.md
+- ../skills/data/api-gateway-design.md
 
 ## REFERENCES
 - ./_common-principles.md

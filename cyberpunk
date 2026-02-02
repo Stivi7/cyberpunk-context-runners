@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
 # Cyberpunk CLI - Agent Structure Scaffolding Tool
-# Version: 0.1.0 (MVP)
+# Version: 0.3.0
 
 set -euo pipefail
 
 # Script configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
-VERSION="0.1.0"
+VERSION="0.3.0"
 
 # Colors for output
 RED='\033[0;31m'
@@ -17,25 +17,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Directory structure to create
-DIRECTORIES=(
-    "agents"
-    "examples"
-    "PRPs"
-    "plans"
-    "tasks"
-    ".cursor/rules"
-)
-
-# Template mappings: "template_path:destination_path"
-TEMPLATE_MAPPINGS=(
-    "agents:agents"
-    "examples:examples"
-    "PRPs:PRPs"
-    "plans:plans"
-    "tasks:tasks"
-    ".cursor/rules/rules.mdc:.cursor/rules/rules.mdc"
-)
+# AI Tool selection (mutually exclusive)
+AI_TOOL=""
 
 # Global flags
 DRY_RUN=false
@@ -67,22 +50,38 @@ USAGE:
     cyberpunk init [OPTIONS]
 
 DESCRIPTION:
-    Scaffold cyberpunk agent structure in the current directory.
-    Copies immutable templates to create the standard directory structure.
+    Scaffold cyberpunk agent and skills structure in the current directory.
+    Tool-specific assets live inside .claude/.cursor/.codex directories.
 
 OPTIONS:
+    --claude        Configure for Claude Code (creates .claude/agents/ + .claude/skills/)
+    --cursor        Configure for Cursor IDE (creates .cursor/agents/ + .cursor/skills/ + .cursor/rules/)
+    --codex         Configure for OpenAI Codex (creates .codex/agents/ + .codex/skills/ + .codex/config.toml)
     --dry-run       Show planned operations without making changes
     --force         Overwrite existing files without prompting
     -h, --help      Show this help message
     -v, --version   Show version information
 
 EXAMPLES:
-    cyberpunk init                    # Initialize with default behavior
-    cyberpunk init --dry-run          # Preview what will be created
-    cyberpunk init --force            # Overwrite existing files
+    cyberpunk init                    # Initialize with CYBERPUNK.md only
+    cyberpunk init --claude           # Configure for Claude Code
+    cyberpunk init --cursor           # Configure for Cursor IDE
+    cyberpunk init --codex            # Configure for OpenAI Codex
+    cyberpunk init --claude --dry-run # Preview Claude configuration
+    cyberpunk init --cursor --force   # Overwrite existing Cursor files
 
 After initialization, use the init agent for project-specific setup and 
 language-specific examples.
+
+AI TOOL INTEGRATION:
+    The Cyberpunk Agent System can be configured for different AI tools:
+    
+    - Claude Code: Uses .claude/agents/ directory with YAML frontmatter
+    - Cursor: Uses .cursor/agents/ directory with .mdc agents + .cursor/rules/ rules
+    - Codex: Uses .codex/agents/ and .codex/skills with .codex/config.toml
+    
+    CYBERPUNK.md is always created in the project root and contains the
+    core rules that can be copied to your AI tool's configuration.
 EOF
 }
 
@@ -140,6 +139,45 @@ create_gitkeep() {
     fi
 }
 
+# Generate agent file by combining header and content
+generate_agent_file() {
+    local header_file="$1"
+    local content_file="$2"
+    local dest_file="$3"
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -f "$dest_file" ]]; then
+            if [[ "$FORCE" == true ]]; then
+                log_info "[DRY-RUN] Would overwrite: $dest_file"
+            else
+                log_warning "[DRY-RUN] Would skip (file exists): $dest_file"
+            fi
+        else
+            log_info "[DRY-RUN] Would generate: $dest_file"
+        fi
+        return 0
+    fi
+    
+    # Create destination directory if needed
+    local dest_dir="$(dirname "$dest_file")"
+    create_directory "$dest_dir"
+    
+    # Handle existing files
+    if [[ -f "$dest_file" ]]; then
+        if [[ "$FORCE" == true ]]; then
+            # Overwrite
+            cat "$header_file" "$content_file" > "$dest_file"
+            log_success "Overwritten: $dest_file"
+        else
+            log_warning "Skipped (file exists): $dest_file"
+        fi
+    else
+        # Create new file
+        cat "$header_file" "$content_file" > "$dest_file"
+        log_success "Generated: $dest_file"
+    fi
+}
+
 # Copy file with conflict handling
 copy_file() {
     local src="$1"
@@ -173,6 +211,49 @@ copy_file() {
     else
         cp "$src" "$dest"
         log_success "Copied: $dest"
+    fi
+}
+
+# Append content to file (creates if doesn't exist, appends if exists)
+append_to_file() {
+    local src="$1"
+    local dest="$2"
+    local append_marker="$3"
+    
+    # Create destination directory if needed
+    local dest_dir="$(dirname "$dest")"
+    create_directory "$dest_dir"
+    
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -f "$dest" ]]; then
+            log_info "[DRY-RUN] Would append to: $dest"
+        else
+            log_info "[DRY-RUN] Would create: $dest"
+        fi
+        return 0
+    fi
+    
+    if [[ -f "$dest" ]]; then
+        # Check if content already exists (using marker)
+        if [[ -n "$append_marker" ]] && grep -q "$append_marker" "$dest" 2>/dev/null; then
+            log_info "Content already exists in: $dest (skipping)"
+            return 0
+        fi
+        
+        if [[ "$FORCE" == true ]]; then
+            # Overwrite with new content
+            cp "$src" "$dest"
+            log_success "Overwritten: $dest"
+        else
+            # Append content
+            echo "" >> "$dest"
+            echo "<!-- Cyberpunk Agent System - Appended Content -->" >> "$dest"
+            cat "$src" >> "$dest"
+            log_success "Appended to: $dest"
+        fi
+    else
+        cp "$src" "$dest"
+        log_success "Created: $dest"
     fi
 }
 
@@ -216,6 +297,301 @@ copy_directory() {
     fi
 }
 
+# Generate Codex agent file with skill path rewrites
+generate_codex_agent_file() {
+    local src="$1"
+    local dest="$2"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -f "$dest" ]]; then
+            if [[ "$FORCE" == true ]]; then
+                log_info "[DRY-RUN] Would overwrite: $dest"
+            else
+                log_warning "[DRY-RUN] Would skip (file exists): $dest"
+            fi
+        else
+            log_info "[DRY-RUN] Would generate: $dest"
+        fi
+        return 0
+    fi
+
+    create_directory "$(dirname "$dest")"
+
+    if [[ -f "$dest" && "$FORCE" != true ]]; then
+        log_warning "Skipped (file exists): $dest"
+        return 0
+    fi
+
+    sed -E 's|\.\./skills/([^/]+)/([^/]+)\.md|../skills/\1-\2/SKILL.md|g' "$src" > "$dest"
+    log_success "Generated: $dest"
+}
+
+# Setup Codex agents
+setup_codex_agents() {
+    local dest_root=".codex/agents"
+    create_directory "$dest_root"
+
+    local agents=("operator" "nexus" "mind" "interrogator" "fragmenter" "coder" "grid-master" "gatekeeper" "_common-principles")
+
+    for agent in "${agents[@]}"; do
+        local src_file="$TEMPLATES_DIR/agents/$agent.md"
+        local dest_file="$dest_root/$agent.md"
+
+        if [[ -f "$src_file" ]]; then
+            generate_codex_agent_file "$src_file" "$dest_file"
+        else
+            log_warning "Missing agent template for: $agent"
+        fi
+    done
+}
+
+# Generate Codex SKILL.md file from a template skill
+generate_codex_skill() {
+    local src="$1"
+    local dest_root="$2"
+    local src_root="$TEMPLATES_DIR/skills"
+    local rel_path="${src#$src_root/}"
+    local category="$(dirname "$rel_path")"
+    local base_name="$(basename "$rel_path" .md)"
+    local category_slug="$category"
+
+    if [[ "$category" == "." ]]; then
+        category="general"
+        category_slug="general"
+    else
+        category_slug="${category_slug//\//-}"
+    fi
+
+    local skill_name="$base_name"
+    if [[ "$category" != "general" ]]; then
+        skill_name="${category_slug}-${base_name}"
+    fi
+
+    local skill_dir="$dest_root/$skill_name"
+    local dest_file="$skill_dir/SKILL.md"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -f "$dest_file" ]]; then
+            if [[ "$FORCE" == true ]]; then
+                log_info "[DRY-RUN] Would overwrite: $dest_file"
+            else
+                log_warning "[DRY-RUN] Would skip (file exists): $dest_file"
+            fi
+        else
+            log_info "[DRY-RUN] Would generate: $dest_file"
+        fi
+        return 0
+    fi
+
+    create_directory "$skill_dir"
+
+    if [[ -f "$dest_file" && "$FORCE" != true ]]; then
+        log_warning "Skipped (file exists): $dest_file"
+        return 0
+    fi
+
+    local skill_title
+    skill_title="$(awk 'NR==1 {sub(/^# Skill: /, ""); print; exit}' "$src")"
+    if [[ -z "$skill_title" ]]; then
+        skill_title="$base_name"
+    fi
+
+    local skill_purpose
+    skill_purpose="$(awk '/^## PURPOSE/ {found=1; next} found && NF {print; exit}' "$src")"
+    if [[ -z "$skill_purpose" ]]; then
+        skill_purpose="$skill_title"
+    fi
+
+    local skill_title_escaped="${skill_title//\"/\\\"}"
+    local skill_purpose_escaped="${skill_purpose//\"/\\\"}"
+
+    {
+        echo "---"
+        echo "name: $skill_name"
+        echo "description: \"$skill_purpose_escaped\""
+        echo "metadata:"
+        echo "  short-description: \"$skill_title_escaped\""
+        echo "  category: \"$category\""
+        echo "---"
+        echo
+        cat "$src"
+    } > "$dest_file"
+
+    log_success "Generated: $dest_file"
+}
+
+# Setup Codex skills
+setup_codex_skills() {
+    local src_root="$TEMPLATES_DIR/skills"
+    local dest_root=".codex/skills"
+
+    if [[ ! -d "$src_root" ]]; then
+        log_warning "Skills templates not found: $src_root"
+        return 0
+    fi
+
+    create_directory "$dest_root"
+
+    while IFS= read -r -d '' skill_file; do
+        if [[ -f "$skill_file" ]]; then
+            generate_codex_skill "$skill_file" "$dest_root"
+        fi
+    done < <(find "$src_root" -type f -name "*.md" -print0 2>/dev/null || true)
+}
+
+# Setup Claude Code configuration
+setup_claude() {
+    log_info "Setting up Claude Code configuration..."
+    
+    # Create .claude/agents directory
+    create_directory ".claude/agents"
+    create_directory ".claude/skills"
+    
+    # Generate agent files by combining headers with agent content
+    local agents=("operator" "nexus" "mind" "interrogator" "fragmenter" "coder" "grid-master" "gatekeeper")
+    
+    for agent in "${agents[@]}"; do
+        local header_file="$TEMPLATES_DIR/headers/claude/$agent.md"
+        local content_file="$TEMPLATES_DIR/agents/$agent.md"
+        local dest_file=".claude/agents/$agent.md"
+
+        if [[ -f "$header_file" && -f "$content_file" ]]; then
+            generate_agent_file "$header_file" "$content_file" "$dest_file"
+        elif [[ -f "$content_file" ]]; then
+            copy_file "$content_file" "$dest_file"
+        elif [[ -f "$header_file" ]]; then
+            copy_file "$header_file" "$dest_file"
+        else
+            log_warning "Missing agent template for: $agent"
+        fi
+    done
+
+    # Copy common principles for agent references
+    copy_file "$TEMPLATES_DIR/agents/_common-principles.md" ".claude/agents/_common-principles.md"
+
+    # Copy skills for Claude agents
+    copy_directory "$TEMPLATES_DIR/skills" ".claude/skills"
+    
+    # Copy CYBERPUNK.md as CLAUDE.md with appended content
+    append_to_file "$TEMPLATES_DIR/CYBERPUNK.md" "CLAUDE.md" "Cyberpunk Agent System"
+    
+    log_success "Claude Code configuration complete!"
+    log_info "Agent files are in: .claude/agents/"
+    log_info "Skills directory: .claude/skills/"
+    log_info "Main context file: CLAUDE.md"
+}
+
+# Setup Cursor configuration
+setup_cursor() {
+    log_info "Setting up Cursor IDE configuration..."
+
+    # Create Cursor directories
+    create_directory ".cursor/agents"
+    create_directory ".cursor/skills"
+    create_directory ".cursor/rules"
+
+    # Generate agent files by combining headers with agent content
+    local agents=("operator" "nexus" "mind" "interrogator" "fragmenter" "coder" "grid-master" "gatekeeper")
+
+    for agent in "${agents[@]}"; do
+        local header_file="$TEMPLATES_DIR/headers/cursor/$agent.md"
+        local content_file="$TEMPLATES_DIR/agents/$agent.md"
+        local dest_file=".cursor/agents/$agent.mdc"
+
+        if [[ -f "$header_file" && -f "$content_file" ]]; then
+            generate_agent_file "$header_file" "$content_file" "$dest_file"
+        elif [[ -f "$content_file" ]]; then
+            copy_file "$content_file" "$dest_file"
+        elif [[ -f "$header_file" ]]; then
+            copy_file "$header_file" "$dest_file"
+        else
+            log_warning "Missing agent template for: $agent"
+        fi
+    done
+
+    # Copy common principles for agent references
+    copy_file "$TEMPLATES_DIR/agents/_common-principles.md" ".cursor/agents/_common-principles.md"
+
+    # Copy skills for Cursor agents
+    copy_directory "$TEMPLATES_DIR/skills" ".cursor/skills"
+
+    # Copy main rule file
+    copy_file "$TEMPLATES_DIR/.cursor/rules/cyberpunk.mdc" ".cursor/rules/cyberpunk.mdc"
+
+    # Ensure CYBERPUNK.md exists for rule inclusion
+    append_to_file "$TEMPLATES_DIR/CYBERPUNK.md" "CYBERPUNK.md" "Cyberpunk Agent System"
+
+    log_success "Cursor IDE configuration complete!"
+    log_info "Agent files: .cursor/agents/*.mdc"
+    log_info "Skills directory: .cursor/skills/"
+    log_info "Rule file: .cursor/rules/cyberpunk.mdc"
+    log_info "Reference file: CYBERPUNK.md"
+}
+
+# Setup Codex configuration
+setup_codex() {
+    log_info "Setting up OpenAI Codex configuration..."
+    
+    # Create .codex directory
+    create_directory ".codex"
+    
+    # Copy config file
+    copy_file "$TEMPLATES_DIR/.codex/config.toml" ".codex/config.toml"
+
+    # Generate Codex agents
+    setup_codex_agents
+
+    # Generate Codex skills
+    setup_codex_skills
+
+    # Ensure CYBERPUNK.md exists for project instructions
+    append_to_file "$TEMPLATES_DIR/CYBERPUNK.md" "CYBERPUNK.md" "Cyberpunk Agent System"
+    
+    log_success "OpenAI Codex configuration complete!"
+    log_info "Config file: .codex/config.toml"
+    log_info "Agent files: .codex/agents/"
+    log_info "Project instructions: CYBERPUNK.md (via config fallback)"
+    log_info "Skills directory: .codex/skills/"
+}
+
+# Setup base structure (always runs)
+setup_base() {
+    log_info "Setting up base Cyberpunk structure..."
+    
+    # Create base directories
+    local base_dirs=(
+        "plans"
+        "tasks"
+    )
+    
+    for dir in "${base_dirs[@]}"; do
+        create_directory "$dir"
+        create_gitkeep "$dir"
+    done
+    
+    # Copy examples
+    copy_directory "$TEMPLATES_DIR/plans" "plans"
+    copy_directory "$TEMPLATES_DIR/tasks" "tasks"
+
+    # Copy CYBERPUNK.md to project root
+    copy_file "$TEMPLATES_DIR/CYBERPUNK.md" "CYBERPUNK.md"
+    
+    log_success "Base structure complete!"
+}
+
+# Setup root agents/skills when no tool is specified
+setup_root_agents() {
+    log_info "No AI tool specified. Scaffolding agents and skills in project root..."
+
+    create_directory "agents"
+    create_directory "skills"
+
+    copy_directory "$TEMPLATES_DIR/agents" "agents"
+    copy_directory "$TEMPLATES_DIR/skills" "skills"
+
+    log_success "Root agents and skills complete!"
+}
+
 # Main initialization function
 init_project() {
     log_info "Initializing cyberpunk agent structure..."
@@ -228,47 +604,67 @@ init_project() {
         log_info "=== DRY RUN MODE - NO FILES WILL BE CREATED ==="
     fi
     
-    # Create base directories
-    for dir in "${DIRECTORIES[@]}"; do
-        create_directory "$dir"
-    done
+    # Always setup base structure
+    setup_base
     
-    # Process template mappings
-    for mapping in "${TEMPLATE_MAPPINGS[@]}"; do
-        local template_path="${mapping%%:*}"
-        local dest_path="${mapping##*:}"
-        local full_template_path="$TEMPLATES_DIR/$template_path"
-        
-        if [[ -f "$full_template_path" ]]; then
-            # Single file mapping
-            copy_file "$full_template_path" "$dest_path"
-        elif [[ -d "$full_template_path" ]]; then
-            # Directory mapping
-            copy_directory "$full_template_path" "$dest_path"
-        else
-            log_error "Template not found: $full_template_path"
-            continue
-        fi
-    done
+    # Setup AI tool specific configuration if specified
+    case "$AI_TOOL" in
+        claude)
+            setup_claude
+            ;;
+        cursor)
+            setup_cursor
+            ;;
+        codex)
+            setup_codex
+            ;;
+        *)
+            setup_root_agents
+            ;;
+    esac
     
     if [[ "$DRY_RUN" == true ]]; then
         log_info "=== END DRY RUN - NO CHANGES MADE ==="
     else
+        echo
         log_success "Cyberpunk agent structure initialized successfully!"
         echo
         log_info "Next steps:"
-        log_info "1. Review the generated directory structure"
-        log_info "2. Use the init agent for project-specific setup and language-specific examples"
-        log_info "3. Customize agents and templates according to your project needs"
+        if [[ -z "$AI_TOOL" ]]; then
+            log_info "1. CYBERPUNK.md has been created in your project root"
+            log_info "2. Agents and skills are available in ./agents and ./skills"
+            log_info "3. Or run with --claude, --cursor, or --codex for tool-specific setup"
+        else
+            log_info "1. Review the generated configuration"
+            log_info "2. Use the init agent for project-specific setup"
+            log_info "3. Customize agents according to your project needs"
+        fi
     fi
 }
 
 # Parse command line arguments
 parse_args() {
+    local tool_count=0
+    
     while [[ $# -gt 0 ]]; do
         case $1 in
             init)
                 # Command already handled by main logic
+                shift
+                ;;
+            --claude)
+                AI_TOOL="claude"
+                ((tool_count++))
+                shift
+                ;;
+            --cursor)
+                AI_TOOL="cursor"
+                ((tool_count++))
+                shift
+                ;;
+            --codex)
+                AI_TOOL="codex"
+                ((tool_count++))
                 shift
                 ;;
             --dry-run)
@@ -295,6 +691,13 @@ parse_args() {
                 ;;
         esac
     done
+    
+    # Validate mutually exclusive AI tool flags
+    if [[ $tool_count -gt 1 ]]; then
+        log_error "Error: Only one AI tool flag can be specified at a time"
+        log_error "Please use only one of: --claude, --cursor, --codex"
+        exit 1
+    fi
 }
 
 # Main function

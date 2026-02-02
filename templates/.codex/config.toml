@@ -1,0 +1,4 @@
+# Cyberpunk Codex project configuration
+# Use CYBERPUNK.md as the project instruction source if AGENTS.md is absent.
+project_doc_fallback_filenames = ["CYBERPUNK.md"]
+project_doc_max_bytes = 65536

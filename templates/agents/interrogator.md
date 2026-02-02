@@ -43,9 +43,9 @@
 - Technical assumptions about system behavior
 
 ## SKILLS
-- ./skills/planning/feasibility-analysis.md
-- ./skills/planning/dependency-mapping.md
-- ./skills/architecture/risk-assessment.md
+- ../skills/planning/feasibility-analysis.md
+- ../skills/planning/dependency-mapping.md
+- ../skills/architecture/risk-assessment.md
 
 ## REFERENCES
 - ./_common-principles.md
