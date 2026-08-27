@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace the static, stack-specific prompt scaffold with a tested, runtime-neutral engineering-team protocol that supports adaptive workflows, specialist agents, extensible skills, hybrid memory, isolated parallel worktrees, and evidence-based delivery.
+**Goal:** Replace the static, stack-specific prompt scaffold with a tested, runtime-neutral engineering-team protocol that tracks mutating agent jobs in isolated worktrees and assembles them into a verified integration branch.
 
-**Architecture:** Canonical Markdown agent, workflow, memory, and skill files define the portable protocol. A dependency-free Bash CLI initializes and validates those artifacts but never invokes a model. Runtime adapters remain thin pointers to the canonical workflow, and local run state stays ignored while curated project knowledge remains trackable.
+**Architecture:** Canonical Markdown agent, workflow, memory, and skill files define the portable protocol. A dependency-free Bash CLI initializes and validates those artifacts but never invokes a model. Nexus resolves an integration branch, tracks every mutating agent assignment through a worktree branch and commit, merges reviewed work in dependency order, and delivers the verified integration branch.
 
 **Tech Stack:** Bash 3.2-compatible shell, Markdown, YAML-as-data, Git, and a dependency-free Bash test harness.
 
@@ -12,25 +12,19 @@
 
 ## Execution Coordination
 
-Use `@superpowers:subagent-driven-development`, `@superpowers:using-git-worktrees`, and `@superpowers:verification-before-completion` when executing this plan.
+Use `@superpowers:verification-before-completion` when executing this plan. Tasks 2–4 and Tasks 5–6 have deliberately non-overlapping ownership and may be delegated in parallel only when the active runtime and user authorization allow it. This implementation-plan coordination is separate from the product requirement below.
 
-Before implementation:
+The generated team must use `@worktree-isolation` for every mutating agent assignment, whether assignments execute concurrently or sequentially. Product behavior must include:
 
-1. Choose the worktree root using the worktree-selection protocol.
-2. Verify a project-local worktree root is ignored before creating it.
-3. Create Task 1 on the feature branch to establish a passing shared test harness.
-4. Create three parallel worktrees from the Task 1 commit:
-   - `team/protocol` for Task 2
-   - `team/agents` for Task 3
-   - `team/skills` for Task 4
-5. Review and integrate those branches into `feature/agentic-engineering-team`.
-6. Create two parallel worktrees from the integrated commit:
-   - `team/cli` for Task 5
-   - `team/docs-adapters` for Task 6
-7. Review and integrate those branches.
-8. Execute Task 7 on the integration branch and run the complete verification suite.
+1. Resolve a user-provided integration branch, or create `cyberpunk/<task-id>-<slug>` from the approved base.
+2. Create each worker at `cyberpunk/<task-id>/<role>-<work-unit>` in a dedicated worktree.
+3. Record worktree path, branch, base commit, owner, state, result commit, and merge status.
+4. Require worker verification and a commit before Gatekeeper approval.
+5. Merge approved workers into the integration branch in dependency order.
+6. Rerun assembled verification and deliver the integration branch.
+7. Remove integrated worktrees safely while retaining or deleting branches according to project policy.
 
-No two parallel tasks below own the same file. Each worktree must run `bash tests/run.sh` before work begins and again before handoff.
+No product workflow may merge implicitly into `main`, another protected branch, or a branch outside the resolved task integration branch.
 
 ### Task 1: Establish the Test Harness and Worktree Safety
 
@@ -135,7 +129,7 @@ git commit -m "test: add dependency-free shell test harness"
 Create `tests/protocol_contract_test.bash` and assert:
 
 - All listed canonical files exist.
-- `config.yml` declares version 1, `working-tree` delivery, adaptive workflow levels, skill search paths, empty enabled project skills, worktree isolation, and disabled commit/push/PR/deploy defaults.
+- `config.yml` declares version 1, `integration-branch` delivery, adaptive workflow levels, skill search paths, empty enabled project skills, worktree isolation, internal job commits, and disabled push/PR/deploy/protected-branch merge defaults.
 - `workflow.md` contains intake, classification, planning, worktree assignment, implementation, review, repair, delivery, and retrospective stages.
 - `workflow.md` defines the work packet and result contracts.
 - `project.md` defines conceptual setup, format, lint, static analysis, unit, integration, build, and security command categories without assigning ecosystem commands.
@@ -156,17 +150,23 @@ Create `templates/.cyberpunk/config.yml` with this top-level schema:
 ```yaml
 version: 1
 delivery:
-  default: working-tree
-  allow_commits: false
+  default: integration-branch
   allow_push: false
   allow_pull_requests: false
   allow_deploy: false
 workflow:
   mode: adaptive
   levels: [quick, standard, complex]
-parallelism:
+git:
+  integration_branch: auto
+  branch_prefix: cyberpunk/
+  worktree_root: .worktrees
   require_worktrees: true
   require_non_overlapping_ownership: true
+  allow_internal_commits: true
+  merge_worker_branches: true
+  allow_protected_branch_merge: false
+  cleanup_worktrees_after_integration: true
 memory:
   tracked: [.cyberpunk/project.md, .cyberpunk/memory]
   local: .cyberpunk/runs
@@ -185,9 +185,13 @@ Create `templates/.cyberpunk/workflow.md` with:
 - Nexus as the sole task entry point and delivery owner.
 - Risk-based quick, standard, and complex routing criteria.
 - Role participation for every route.
-- Mandatory isolated worktrees for parallel assignments.
-- A YAML work packet containing id, objective, owner, allowed scope, acceptance, verification categories, dependencies, memory references, and required skills.
-- A result contract containing status, changed files, acceptance results, commands observed, checks not run, risks, and candidate lessons.
+- Mandatory isolated worktrees for every mutating assignment, including sequential execution.
+- Integration-branch resolution from user input or the `cyberpunk/<task-id>-<slug>` default.
+- Worker branch naming as `cyberpunk/<task-id>/<role>-<work-unit>`.
+- A YAML work packet containing id, objective, owner, integration branch, base commit, worker branch, worktree, allowed scope, acceptance, verification categories, dependencies, memory references, and required skills.
+- A result contract containing status, changed files, acceptance results, commands observed, checks not run, risks, candidate lessons, result commit, and merge readiness.
+- Run-state tracking for each worktree, commit, review status, and merge status.
+- Gatekeeper review before merge, dependency-ordered integration, assembled verification, and safe cleanup.
 - Review routing and the two-repair re-diagnosis / third-cycle escalation rule.
 - Default authority boundaries.
 
@@ -265,6 +269,7 @@ Create `tests/agent_contract_test.bash` to iterate over the ten public agent fil
 Also assert:
 
 - Nexus contains adaptive routing and delivery ownership.
+- Nexus contains integration-branch resolution, worker merge ordering, and worktree cleanup ownership.
 - Coder identifies itself as a shared engineering contract.
 - Daemon identifies itself as the backend engineer.
 - Neon identifies itself as the frontend engineer.
@@ -391,7 +396,7 @@ Create `templates/skills/README.md` documenting:
 
 **Step 3: Implement planning and coordination skills**
 
-Add task classification, repository discovery, implementation planning, plan review, task decomposition, and worktree isolation. Each procedure must be a short checklist with explicit stop conditions and an evidence-bearing output.
+Add task classification, repository discovery, implementation planning, plan review, task decomposition, and worktree isolation. The worktree skill must cover integration-branch resolution, worker branch creation, state recording, baseline verification, worker commit handoff, Gatekeeper review, dependency-ordered merge, assembled verification, and cleanup. Each procedure must be a short checklist with explicit stop conditions and an evidence-bearing output.
 
 **Step 4: Implement engineering skills**
 
@@ -435,7 +440,7 @@ Create `tests/cli_test.bash` with isolated temporary projects covering:
 
 1. `init --dry-run` creates no files and reports planned operations.
 2. `init` copies multiple agent, protocol, skill, and adapter files, catching the existing first-copy exit regression.
-3. `init` creates `.cyberpunk/runs/` and appends `.cyberpunk/runs/` and `.worktrees/` to `.gitignore` exactly once.
+3. `init` creates `.cyberpunk/runs/` and appends `.cyberpunk/runs/` and the configured `.worktrees/` root to `.gitignore` exactly once.
 4. A second `init` preserves a user-modified file.
 5. `init --force` refreshes framework-owned templates.
 6. `init --force` does not delete or overwrite an extra `skills/project/custom/SKILL.md` file.
@@ -527,7 +532,7 @@ Assert that:
 
 - All three runtime adapters point to `.cyberpunk/workflow.md` and `agents/nexus.md`.
 - No adapter duplicates the full workflow.
-- README describes the single-task Nexus interface, adaptive modes, Daemon, Neon, hybrid memory, skills, worktrees, validation, and working-tree delivery.
+- README describes the single-task Nexus interface, adaptive modes, Daemon, Neon, hybrid memory, skills, worker worktrees, integration branches, validation, and branch delivery.
 - The documented role count matches the templates.
 - Documentation does not claim universal AWS, TypeScript, functional-programming, npm, or fixed-coverage requirements.
 
@@ -556,10 +561,10 @@ Lead with:
 
 ```text
 Give The Nexus a task. The team inspects, plans proportionally, implements,
-verifies, learns, and returns a working-tree delivery report.
+verifies, learns, and returns a verified integration branch.
 ```
 
-Document installation, `init`, `validate`, `status`, architecture, adaptive workflows, roles, skills, memory, parallel worktree isolation, authority defaults, direct-role compatibility, and troubleshooting.
+Document installation, `init`, `validate`, `status`, architecture, adaptive workflows, roles, skills, memory, worker worktree tracking, integration-branch resolution, internal commit/merge authority, protected-branch restrictions, direct-role compatibility, and troubleshooting.
 
 **Step 4: Update template documentation**
 
@@ -603,6 +608,8 @@ Create `tests/integration_test.bash` that:
 6. Adds a custom project skill, runs `init --force`, and confirms its checksum is unchanged.
 7. Confirms a second initialization does not duplicate ignore entries.
 8. Confirms `status` is read-only by comparing `git status --porcelain` before and after.
+9. Confirms generated workflow and config define integration-branch resolution, worker branches, worktree state, internal commits, review-before-merge, assembled verification, and cleanup.
+10. Confirms generated policy prohibits implicit protected-branch merges, pushes, pull requests, and deployments.
 
 Run:
 
@@ -643,7 +650,8 @@ Review the complete branch against `docs/plans/2026-08-28-agentic-engineering-te
 - No claims of agent execution by the CLI.
 - Correct worktree isolation guidance.
 - Independent Gatekeeper evidence requirements.
-- No automatic commits, pushes, PRs, deployments, or skill mutation in generated policy.
+- Internal worker commits and merges are limited to the resolved task integration branch.
+- No implicit pushes, PRs, deployments, protected-branch merges, or skill mutation in generated policy.
 
 Resolve critical and important findings, then rerun the complete verification suite.
 
@@ -659,6 +667,7 @@ git commit -m "feat: deliver runtime-neutral agentic engineering team"
 Before reporting completion, capture:
 
 - Current branch and commit.
+- Generated integration-branch and worker-worktree policy validation.
 - `bash -n cyberpunk` result.
 - Test-file and assertion counts from `bash tests/run.sh`.
 - ShellCheck result or explicit unavailability.

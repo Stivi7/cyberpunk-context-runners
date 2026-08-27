@@ -10,7 +10,7 @@ Cyberpunk Context Runners will evolve from a collection of manually invoked role
 
 Markdown defines agent behavior and handoff contracts. YAML stores project policy and resumable task state. The CLI scaffolds and validates the system without depending on a particular model vendor or agent runtime.
 
-The default delivery target is a verified working tree plus a concise delivery report. Commits, pull requests, deployments, destructive actions, and external communication require explicit project policy or user authorization.
+The default delivery target is a verified integration branch plus a concise delivery report. The team may create internal work branches, commits, worktrees, and merges needed to assemble that branch. Pushes, pull requests, deployments, destructive actions, protected-branch merges, and external communication require explicit project policy or user authorization.
 
 ## Goals
 
@@ -19,7 +19,8 @@ The default delivery target is a verified working tree plus a concise delivery r
 - Scale the workflow to task risk and uncertainty instead of applying full ceremony every time.
 - Preserve the existing cyberpunk identities while giving each role a precise engineering contract.
 - Support frontend, backend, infrastructure, planning, and independent review specialties.
-- Run independent parallel assignments in isolated Git worktrees.
+- Track every mutating assignment through an isolated Git worktree, branch, commit, and merge state.
+- Assemble verified agent contributions into a user-selected or Nexus-created integration branch.
 - Learn from evidence-backed mistakes without accumulating unreviewed context.
 - Discover verification commands and quality policies from each repository.
 - Produce transparent delivery evidence and retain unresolved risks.
@@ -29,7 +30,7 @@ The default delivery target is a verified working tree plus a concise delivery r
 - Build a vendor-specific agent invocation engine.
 - Require a particular language, framework, package manager, cloud provider, or architecture style.
 - Require functional programming, AWS, TypeScript, or a universal coverage percentage.
-- Automatically deploy, commit, push, or open pull requests by default.
+- Automatically push, open pull requests, deploy, or merge into protected branches by default.
 - Store every conversation or raw command output in version control.
 - Pretend that roles ran concurrently on runtimes that do not support parallel agents.
 
@@ -63,7 +64,7 @@ Nexus: normalize, classify, coordinate, track, deliver
                   -> specialists/Grid Master -> Gatekeeper -> repair loop
    |
    v
-Verified working tree + delivery report + curated learning
+Verified integration branch + delivery report + curated learning
 ```
 
 The system never depends on agent personas sharing hidden conversational context. Each handoff is an explicit work packet and each result follows a stable contract.
@@ -260,19 +261,43 @@ Use for architectural, cross-stack, security-sensitive, migratory, operationally
 
 ## Parallel Worktree Isolation
 
-Parallel work is allowed only when Fragmenter identifies independent assignments with non-overlapping ownership or an explicit integration contract.
+Git worktrees are part of the generated team's normal implementation lifecycle, not only an optimization for capable runtimes. Every assignment that may modify repository files receives an isolated worktree and branch. Read-only planning and review work may operate without a dedicated worktree.
 
-- Each parallel assignment receives its own Git branch and worktree.
-- Project-local worktree directories must be ignored before creation.
-- Every worktree starts from the same approved base commit.
-- The project-specific setup and baseline verification run inside each worktree.
-- Each agent changes only its assigned scope and records its verification evidence.
-- Gatekeeper reviews each worktree before integration.
-- Nexus integrates approved work in dependency order and reruns assembled verification.
-- Merge conflicts are resolved by the role owning the integration contract, not independently in multiple worktrees.
-- Worktrees are removed only after their changes are safely integrated or intentionally discarded.
+At task intake, Nexus resolves the integration branch:
 
-If a runtime cannot provide parallel agents, Nexus preserves the same work packets and executes them sequentially. The protocol must not imply concurrency that did not occur.
+- Use the branch named by the user when one is explicitly provided.
+- Otherwise create `cyberpunk/<task-id>-<slug>` from the current approved base.
+- Never merge into `main`, another protected branch, or an unrelated user branch implicitly.
+
+Each mutating work unit receives:
+
+- Branch: `cyberpunk/<task-id>/<role>-<work-unit>`.
+- Worktree: `<configured-root>/<task-id>/<work-unit>`; the default root is `.worktrees/`.
+- The approved integration-branch commit as its base.
+- Explicit file ownership and integration-contract boundaries.
+
+Project-local worktree roots must be ignored before creation. The project-specific setup and baseline verification run inside each worktree. The assigned agent changes only its permitted scope, runs relevant verification, commits the result on the work branch, and returns the commit SHA with its evidence.
+
+Gatekeeper reviews each worktree and commit before integration. Failed work returns to the same worktree for repair. Nexus merges approved commits into the integration branch in dependency order and reruns assembled verification after each relevant merge. Merge conflicts are resolved centrally by the role owning the integration contract, not independently in multiple worktrees.
+
+Run state records the relationship explicitly:
+
+```yaml
+integration_branch: cyberpunk/TASK-014-session-renewal
+base_commit: abc123
+jobs:
+  backend:
+    agent: daemon
+    branch: cyberpunk/TASK-014/daemon-session-api
+    worktree: .worktrees/TASK-014/daemon-session-api
+    status: verified
+    commit: def456
+    merged: false
+```
+
+Parallel work is allowed only when Fragmenter identifies independent assignments with non-overlapping ownership or an explicit integration contract. Runtimes without parallel agents execute the same isolated worktree jobs sequentially and record that execution honestly.
+
+After successful integration and final verification, Nexus removes completed worktrees. Worker branches remain until integration is confirmed and are then handled according to project cleanup policy. The integration branch is the delivered artifact; pushing it, opening a pull request, or merging it into a protected branch remains outside default authority.
 
 ## Work Packet Contract
 
@@ -283,6 +308,10 @@ id: TASK-014
 objective: Add session renewal
 owner: daemon
 workflow: standard
+integration_branch: cyberpunk/TASK-014-session-renewal
+base_commit: abc123
+worker_branch: cyberpunk/TASK-014/daemon-session-api
+worktree: .worktrees/TASK-014/daemon-session-api
 allowed_scope:
   - path/to/auth/**
 acceptance:
@@ -294,6 +323,9 @@ verification_categories:
 dependencies: []
 memory_refs:
   - .cyberpunk/memory/patterns.md#authentication
+required_skills:
+  - scoped-implementation
+  - backend-safety
 ```
 
 The packet contains objectives and conceptual verification categories, not hardcoded ecosystem commands. Operator resolves categories through the project command registry.
@@ -307,6 +339,7 @@ Every agent returns:
 - Commands not run and the reason.
 - Remaining risks and assumptions.
 - Discoveries and candidate lessons.
+- Result commit SHA and merge readiness.
 
 ## Project Discovery and Verification
 
@@ -362,11 +395,15 @@ After two unsuccessful repairs for the same finding, Nexus requires a new root-c
 
 ## Authority and Delivery
 
-Default authority allows repository inspection, local file changes, and project-relevant verification. It does not allow deployment, destructive operations, external messages, commits, pushes, or pull requests unless the user or project policy enables them.
+Default authority allows repository inspection, project-relevant verification, creation of the task integration branch, isolated worker worktrees and branches, internal commits, and merges of approved worker branches into the task integration branch. These Git operations are required for task tracking and assembly.
+
+Default authority does not allow deployment, destructive operations, external messages, pushes, pull requests, or merges into `main`, protected branches, or branches outside the resolved task integration branch unless the user or project policy enables them.
 
 The default delivery report contains:
 
 - Outcome and acceptance status.
+- Delivered integration branch and commit.
+- Worker branch, worktree, commit, and merge status summary.
 - Changed files.
 - Verification commands and observed results.
 - Relevant checks not run and why.
@@ -382,6 +419,7 @@ The CLI remains small and deterministic. It will:
 - Add required ignore rules safely.
 - Validate required files and agent contracts.
 - Check configuration and local task-state structure.
+- Validate integration-branch, worker-branch, worktree, commit, and merge-state policy.
 - Report team and project status.
 - Support dry-run and idempotent initialization.
 
@@ -399,6 +437,7 @@ The repository will gain automated coverage for:
 - Runtime adapters pointing to canonical instructions.
 - Skill metadata, required sections, registry resolution, and core identifier uniqueness.
 - Project-owned skills remaining untouched during initialization and forced updates.
+- Integration-branch resolution, isolated worker-job tracking, and protected-branch restrictions.
 - Local run data being ignored while curated memory remains trackable.
 - Cross-language fixtures showing project-specific command registries.
 - Absence of universal Node, AWS, TypeScript, or fixed coverage assumptions.
@@ -417,7 +456,8 @@ The README and Cursor adapter will be rewritten around the single-task workflow.
 - One user task can progress through an appropriate workflow and produce a consistent delivery report.
 - Quick tasks avoid unnecessary planning artifacts.
 - Complex tasks produce explicit contracts and dependency-aware assignments.
-- Daemon and Neon can work independently in isolated worktrees and integrate safely.
+- Every mutating agent job is traceable through run state, an isolated worktree, a worker branch, a reviewed commit, and integration status.
+- Daemon and Neon can work independently in isolated worktrees and merge safely into the resolved integration branch.
 - Agents load default and scenario-specific skills without duplicating role definitions.
 - User-owned project skills can be added without modifying or shadowing core skills.
 - Gatekeeper bases approval on observed evidence.
