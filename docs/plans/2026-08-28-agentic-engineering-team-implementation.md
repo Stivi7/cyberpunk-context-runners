@@ -356,16 +356,14 @@ git commit -m "feat: modernize the cyberpunk engineering team"
 
 **Step 1: Write failing skill contract tests**
 
-Create `tests/skill_contract_test.bash` that finds every `templates/skills/core/*/SKILL.md` and requires YAML frontmatter fields:
+Create `tests/skill_contract_test.bash` that finds every `templates/skills/core/*/SKILL.md` and requires portable YAML frontmatter:
 
 ```yaml
 name:
-version:
 description:
-triggers:
-allowed-agents:
-side-effects:
 ```
+
+Require a Markdown metadata section containing version, triggers, allowed agents, and side effects. Keeping extended metadata outside frontmatter avoids runtime parser incompatibilities.
 
 The test must also verify:
 

@@ -192,7 +192,7 @@ skills/
 
 Core skills ship with the framework. Project skills are owned by the user and must never be overwritten by initialization or framework updates.
 
-Each `SKILL.md` uses portable YAML frontmatter and Markdown instructions. Its metadata includes an identifier, version, description, triggers, compatible agents, required inputs or tools, possible side effects, expected outputs, and verification requirements. Supporting references, templates, or scripts may live beside it.
+Each `SKILL.md` keeps only `name` and `description` in YAML frontmatter for broad runtime compatibility. A Markdown metadata section records version, triggers, compatible agents, and side effects. The remaining body defines inputs, procedure, verification, and output. Supporting references, templates, or scripts may live beside it.
 
 Agents first inspect the skill catalog, then fully load only the smallest relevant set. Nexus records required and conditional skills in each work packet:
 
