@@ -51,4 +51,16 @@ for banned in "AWS" "TypeScript" "npm" "95% coverage"; do
     assert_not_contains "$documentation" "$banned" "documentation must not prescribe $banned"
 done
 
+test_start "shipped example follows the runtime-neutral specification model"
+example="$REPO_ROOT/templates/examples/specs/todo-list-example.md"
+assert_file "$example"
+[[ ! -e "$REPO_ROOT/templates/examples/PRPs/todo-list-example.md" ]] || fail "legacy stack-specific PRP example is still shipped"
+example_content="$(<"$example")"
+for heading in "## Objective" "## Scope" "## Acceptance Criteria" "## Verification Categories" "## Delivery"; do
+    assert_contains "$example_content" "$heading" "example specification"
+done
+for banned in "AWS" "TypeScript" "npm" "95% coverage"; do
+    assert_not_contains "$example_content" "$banned" "example must not prescribe $banned"
+done
+
 echo "PASS: documentation contract tests"
