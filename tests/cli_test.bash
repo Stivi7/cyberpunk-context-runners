@@ -51,6 +51,8 @@ echo "fixer-user-marker" >> "$project/agents/fixer.md"
 echo "discovery-user-marker" >> "$project/skills/core/requirements-discovery/SKILL.md"
 assert_exit 0 run_cli "$project" init
 assert_contains "$(<"$project/agents/nexus.md")" "user-marker"
+assert_contains "$(<"$project/agents/fixer.md")" "fixer-user-marker"
+assert_contains "$(<"$project/skills/core/requirements-discovery/SKILL.md")" "discovery-user-marker"
 assert_eq 1 "$(line_count ".cyberpunk/runs/" "$project/.gitignore")" "idempotent run ignore"
 assert_eq 1 "$(line_count ".worktrees/" "$project/.gitignore")" "idempotent worktree ignore"
 
