@@ -8,6 +8,7 @@ source "$TESTS_DIR/test_helper.bash"
 SKILL_ROOT="$REPO_ROOT/templates/skills"
 expected_skills=(
     task-classification
+    requirements-discovery
     repository-discovery
     implementation-planning
     plan-review
@@ -50,6 +51,25 @@ for skill in "${expected_skills[@]}"; do
         fail "duplicate skill name: $skill"
     fi
     seen_names="$seen_names $skill"
+done
+
+test_start "requirements discovery preserves approval and handoff gates"
+discovery="$(<"$SKILL_ROOT/core/requirements-discovery/SKILL.md")"
+for value in \
+    "Brief" \
+    "Standard" \
+    "Architectural" \
+    "one focused question" \
+    "two or three" \
+    "design approval" \
+    "artifact approval" \
+    "specs/YYYY-MM-DD-<topic>-prd.md" \
+    "must not overwrite" \
+    "current named branch" \
+    "commit only the approved PRD" \
+    "discovery_complete: true" \
+    "user_authorized_handoff: true"; do
+    assert_contains "$discovery" "$value" "requirements-discovery safeguard"
 done
 
 test_start "core skills remain language neutral"
