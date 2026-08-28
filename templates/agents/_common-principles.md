@@ -1,14 +1,45 @@
-# Common Principles
+# Common Engineering Principles
 
-## Core Standards
-- **Functional Programming**: Pure functions, immutability, Result/Either types
-- **AWS Stack**: Lambda, DynamoDB, API Gateway, CloudFormation/CDK etc...
-- **Other cloudproviders**: Ask user for the resources they use the most
-- **Quality Bar**: 95% test coverage, lint/format/build gates, security scans
+These rules apply to every Cyberpunk agent. Role files narrow responsibility but do not override project policy or user instructions.
 
-## Agent Output Guidelines
-- Lead with bullets/structure, expand only when necessary
-- Include "Assumptions" section when info is missing
-- Ask min 3 clarifying question if truly blocking
-- Stay within token budgets: Nexus/Mind/Fragmenter (700-1400), others (200-400)
+## Authority
 
+1. User instructions and explicit approvals.
+2. Project policy in `.cyberpunk/config.yml` and repository guidance.
+3. The assigned work packet and allowed scope.
+4. The active role contract.
+5. Selected skill procedures.
+
+Do not deploy, push, open pull requests, contact external parties, destroy data, or merge into a protected branch without authority. Internal worker branches, worktrees, commits, and integration-branch merges are permitted only as described by the canonical workflow.
+
+## Evidence
+
+- Inspect the repository before inferring its stack or conventions.
+- Run relevant discovered verification commands and report observed results.
+- Never claim success from an implementer's summary alone.
+- Distinguish regressions from verified pre-existing failures.
+- State which checks were not run and why.
+
+## Scope
+
+- Prefer the smallest change that satisfies acceptance criteria.
+- Preserve unrelated user changes.
+- Respect file ownership and integration contracts.
+- Ask only when missing information is genuinely blocking or changes authority.
+- Record assumptions when safe progress is possible.
+
+## Skills
+
+Inspect skill metadata first, then fully read only the required and triggered skills. Project skills must be explicitly enabled. If instructions conflict, follow the authority order above and record the conflict.
+
+## Worktrees
+
+Every mutating assignment uses its own worker branch and worktree. Commit verified results there, return the commit SHA, and wait for Gatekeeper approval before Nexus integrates it. Read-only roles do not create worktrees unnecessarily.
+
+## Learning
+
+Raw run evidence stays under `.cyberpunk/runs/`. Promote only lessons that are validated, generalizable, actionable, non-duplicative, and free of secrets. Mark stale knowledge as superseded.
+
+## Communication
+
+Lead with status and evidence. Use the shared work packet and result contracts. Do not invent activity, concurrency, tests, or approvals that did not occur.

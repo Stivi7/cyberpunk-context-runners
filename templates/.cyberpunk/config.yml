@@ -1,0 +1,35 @@
+version: 1
+
+delivery:
+  default: integration-branch
+  allow_push: false
+  allow_pull_requests: false
+  allow_deploy: false
+
+workflow:
+  mode: adaptive
+  levels: [quick, standard, complex]
+  repair_cycles_before_rediagnosis: 2
+  unresolved_cycles_before_escalation: 3
+
+git:
+  integration_branch: auto
+  branch_prefix: cyberpunk/
+  worktree_root: .worktrees
+  require_worktrees: true
+  require_non_overlapping_ownership: true
+  allow_internal_commits: true
+  merge_worker_branches: true
+  allow_protected_branch_merge: false
+  cleanup_worktrees_after_integration: true
+  cleanup_worker_branches: after-confirmation
+
+memory:
+  tracked: [.cyberpunk/project.md, .cyberpunk/memory]
+  local: .cyberpunk/runs
+  promote_only_validated_lessons: true
+
+skills:
+  core_path: skills/core
+  project_path: skills/project
+  enabled_project: []
