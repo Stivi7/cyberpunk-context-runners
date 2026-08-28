@@ -1,0 +1,2 @@
+- Add the PRD creator (cyberpunk persona). Should behave like superpowers brainstorming skill. Either use that or make a custom one. The goal is to interact with the user and build requirements which nexus can use.
+- Ability to work across different repositories. Most of the times we have projects that are scattered across different repositories, for example backend, frontend, infrastructure etc... The cyberpunk should be able to work across these and maintain the memory web and how these projects are related.
