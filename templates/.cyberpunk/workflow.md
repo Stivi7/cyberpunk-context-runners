@@ -1,12 +1,40 @@
 # Cyberpunk Engineering Team Workflow
 
-The Nexus is the single entry point for user tasks and owns coordination through delivery. Agents exchange explicit artifacts; they do not rely on hidden conversational context.
+The Nexus is the default entry point for engineering tasks and owns coordination through delivery. The Fixer is the direct entry point for product discovery and may also receive discovery-heavy work from Nexus. Agents exchange explicit artifacts; they do not rely on hidden conversational context.
 
 ## Intake
 
 Nexus converts the request into an objective, measurable acceptance criteria, scope boundaries, authority constraints, target branch preference, and known risks. It reads `.cyberpunk/config.yml`, `.cyberpunk/project.md`, relevant memory, and current Git state before assigning work.
 
 If the user names an integration branch, Nexus uses it. Otherwise Nexus creates `cyberpunk/<task-id>-<slug>` from the approved current base. Nexus never selects a protected branch implicitly.
+
+## Requirements Discovery
+
+Users may invoke The Fixer directly. Before classification, Nexus routes a new product, feature, or architectural request to The Fixer when material decisions about the target user, problem, scope, expected behavior, constraints, or acceptance criteria remain unresolved. Nexus does not route a routine bug fix or maintenance task, a sufficiently specified request, or an approved PRD with no blocking deferred decision.
+
+The Fixer loads `requirements-discovery`, inspects project context and relevant memory, and uses Brief, Standard, or Architectural discovery depth. It asks one focused question at a time, compares two or three viable approaches, and presents requirements in sections for user approval. Work that is too broad for one PRD is decomposed before discovery continues.
+
+No PRD is written before design approval. After approval, The Fixer writes `specs/YYYY-MM-DD-<topic>-prd.md`, self-reviews it, and asks the user to review the actual file. After artifact approval, The Fixer confirms the current named branch and creates a focused commit containing only the approved PRD.
+
+Approved PRD authoring is a planning-artifact exception to worker worktree isolation. It does not exempt implementation or any other mutating assignment from its worker branch, review, and integration requirements.
+
+Only after the commit succeeds does The Fixer ask whether to hand the PRD to Nexus. Declining the handoff ends successfully with the committed PRD. Approving it produces:
+
+```yaml
+source: fixer
+discovery_complete: true
+prd_path: specs/YYYY-MM-DD-topic-prd.md
+prd_commit: abc123
+branch: current-branch
+acceptance_criteria: []
+risks: []
+deferred_decisions: []
+user_authorized_handoff: true
+```
+
+Capable runtimes may route the authorized contract directly to Nexus. Other runtimes continue sequentially from the same artifact and report that execution honestly rather than claiming a separate agent ran.
+
+Nexus validates the artifact and does not repeat discovery when `discovery_complete: true` has no contradiction or blocking deferred decision. If a concrete blocker exists, Nexus asks for the smallest missing decision instead of restarting the discovery flow.
 
 ## Classification
 
@@ -22,7 +50,7 @@ Operator refreshes repository facts when needed. Mind defines the implementation
 
 ## Worktree Assignment
 
-Every mutating work unit receives its own branch and Git worktree, including sequential jobs. Read-only planning and review do not require worktrees.
+Every mutating implementation work unit receives its own branch and Git worktree, including sequential jobs. Read-only planning and review do not require worktrees. The approved PRD planning-artifact exception is defined under Requirements Discovery; it applies only to The Fixer's focused PRD commit on the current named branch.
 
 - Worker branch: `cyberpunk/<task-id>/<role>-<work-unit>`
 - Worktree: `<worktree-root>/<task-id>/<work-unit>`
@@ -112,3 +140,5 @@ jobs:
 ## Authority
 
 Internal worker branches, worktrees, commits, and merges into the resolved task integration branch are allowed. Destructive operations, external messages, pushes, pull requests, deployments, and protected branch merges require explicit authority.
+
+An approved Fixer PRD may be committed on the current named branch only through the Requirements Discovery gates. That authority does not include unrelated files or implementation work.
