@@ -72,6 +72,28 @@ for value in \
     assert_contains "$discovery" "$value" "requirements-discovery safeguard"
 done
 
+test_start "requirements discovery defines the complete PRD schema"
+prd_headings=(
+    "Summary and Problem Statement"
+    "Target Users and Use Cases"
+    "Goals and Success Criteria"
+    "Non-goals and Scope Boundaries"
+    "Functional Requirements"
+    "User Journeys and Expected Behavior"
+    "Constraints and Non-functional Requirements"
+    "Considered Approaches and Accepted Decisions"
+    "Edge Cases and Failure Behavior"
+    "Acceptance Criteria"
+    "Dependencies and Risks"
+    "Deferred Decisions"
+)
+for heading in "${prd_headings[@]}"; do
+    assert_contains "$discovery" "$heading" "requirements-discovery PRD heading"
+done
+for field in "owner" "reason" "resolution stage"; do
+    assert_contains "$discovery" "$field" "requirements-discovery deferred-decision field"
+done
+
 test_start "core skills remain language neutral"
 for skill in "${expected_skills[@]}"; do
     content="$(<"$SKILL_ROOT/core/$skill/SKILL.md")"
@@ -85,6 +107,10 @@ worktree="$(<"$SKILL_ROOT/core/worktree-isolation/SKILL.md")"
 for value in "integration branch" "worker branch" "base commit" "Gatekeeper" "dependency order" "assembled verification" "protected branch" "cleanup"; do
     assert_contains "$worktree" "$value" "worktree lifecycle"
 done
+assert_contains "$worktree" "Mutating implementation jobs" "worktree trigger scope"
+assert_contains "$worktree" "only approved planning-artifact exception" "worktree PRD exception"
+assert_not_contains "$worktree" "Any mutating agent job" "worktree trigger must not cover planning artifacts"
+assert_not_contains "$worktree" "every job that may write" "worktree usage must be implementation-scoped"
 memory="$(<"$SKILL_ROOT/core/memory-curation/SKILL.md")"
 for value in "evidence" "generalizable" "actionable" "secret" "superseded"; do
     assert_contains "$memory" "$value" "memory safeguard"

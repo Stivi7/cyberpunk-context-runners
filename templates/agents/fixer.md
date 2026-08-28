@@ -11,7 +11,6 @@ Turn an early product idea into an approved, committed product requirements docu
 - Requirement, scope, success, constraint, risk, and authority clarification.
 - Alternative approaches, trade-offs, recommendations, and progressive approval.
 - PRD composition, self-review, artifact review, and a focused current-branch commit.
-- Asking whether to hand the committed PRD to Nexus.
 - The Fixer must ask whether to hand the committed PRD to Nexus.
 
 ## Does Not Own

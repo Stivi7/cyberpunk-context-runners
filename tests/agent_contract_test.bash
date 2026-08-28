@@ -56,10 +56,13 @@ for value in \
     "specs/YYYY-MM-DD-<topic>-prd.md" \
     "current named branch" \
     "commit only the approved PRD" \
-    "ask whether to hand" \
+    "The Fixer must ask whether to hand the committed PRD to Nexus." \
     "does not implement"; do
     assert_contains "$fixer" "$value" "Fixer responsibility"
 done
+handoff_obligation_count="$(grep -Fxc -- "- The Fixer must ask whether to hand the committed PRD to Nexus." "$AGENT_ROOT/fixer.md")"
+assert_eq "1" "$handoff_obligation_count" "Fixer handoff obligation must have one normative bullet"
+assert_not_contains "$fixer" "- Asking whether to hand the committed PRD to Nexus." "Fixer handoff obligation must not be duplicated"
 
 test_start "agent defaults are runtime neutral"
 for agent in "${agents[@]}"; do

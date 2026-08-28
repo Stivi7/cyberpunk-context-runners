@@ -14,6 +14,7 @@ PATTERNS="$TEMPLATE_ROOT/.cyberpunk/memory/patterns.md"
 LESSONS="$TEMPLATE_ROOT/.cyberpunk/memory/lessons.md"
 NEXUS="$TEMPLATE_ROOT/agents/nexus.md"
 COMMON_PRINCIPLES="$TEMPLATE_ROOT/agents/_common-principles.md"
+WORKTREE_SKILL="$TEMPLATE_ROOT/skills/core/worktree-isolation/SKILL.md"
 
 test_start "canonical protocol files exist"
 assert_file "$CONFIG"
@@ -104,6 +105,16 @@ done
 common_principles="$(<"$COMMON_PRINCIPLES")"
 for value in "planning-artifact exception" "approved PRD" "current named branch"; do
     assert_contains "$common_principles" "$value" "PRD worktree exception"
+done
+
+worktree_skill="$(<"$WORKTREE_SKILL")"
+for value in \
+    "mutating implementation" \
+    "only approved planning-artifact exception" \
+    "approved PRD" \
+    "current named branch" \
+    "does not exempt implementation"; do
+    assert_contains "$worktree_skill" "$value" "worktree skill PRD exception"
 done
 
 test_start "project context uses conceptual command categories"

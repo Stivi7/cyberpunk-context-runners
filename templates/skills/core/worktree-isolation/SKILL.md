@@ -8,13 +8,13 @@ description: Use when an agent assignment may modify repository files and must b
 ## Metadata
 
 - Version: 1.0.0
-- Triggers: Any mutating agent job, sequential or parallel
+- Triggers: Mutating implementation jobs, sequential or parallel
 - Allowed agents: Nexus, Fragmenter, Daemon, Neon, Grid Master
 - Side effects: Creates branches, worktrees, internal commits, merges, and local run state
 
 ## When to Use
 
-Use for every job that may write repository files. Read-only planning and review do not need their own worktree.
+Use for every mutating implementation job that may write repository files. The only approved planning-artifact exception is an approved PRD that The Fixer writes and commits by itself on the current named branch after design and artifact approval. This exception does not exempt implementation or unrelated files from worker branch, review, and integration requirements. Read-only planning and review do not need their own worktree.
 
 ## Inputs
 
