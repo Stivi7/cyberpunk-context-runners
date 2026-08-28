@@ -9,11 +9,6 @@ VERSION="0.2.0"
 DRY_RUN=false
 FORCE=false
 
-IGNORE_ENTRIES=(
-    ".cyberpunk/runs/"
-    ".worktrees/"
-)
-
 REQUIRED_FILES=(
     ".cyberpunk/config.yml"
     ".cyberpunk/project.md"
@@ -162,12 +157,30 @@ ignore_entry_exists() {
     [[ -f "$ignore_file" ]] && grep -Fqx "$entry" "$ignore_file"
 }
 
+configured_worktree_ignore() {
+    local root=".worktrees"
+    local configured=""
+
+    if [[ -f ".cyberpunk/config.yml" ]]; then
+        configured="$(sed -n 's/^[[:space:]]*worktree_root:[[:space:]]*//p' .cyberpunk/config.yml | head -n 1)"
+        configured="${configured#\"}"
+        configured="${configured%\"}"
+        [[ -n "$configured" ]] && root="$configured"
+    fi
+
+    printf '%s/\n' "${root%/}"
+}
+
 ensure_ignore_entries() {
     local ignore_file=".gitignore"
     local entry
     local missing_count=0
+    local entries=(
+        ".cyberpunk/runs/"
+        "$(configured_worktree_ignore)"
+    )
 
-    for entry in "${IGNORE_ENTRIES[@]}"; do
+    for entry in "${entries[@]}"; do
         if ! ignore_entry_exists "$entry" "$ignore_file"; then
             missing_count=$((missing_count + 1))
             if [[ "$DRY_RUN" == true ]]; then
@@ -219,6 +232,21 @@ validate_project() {
     local path
     local entry
     local skill_path
+    local required_policy
+    local ignore_entries=(
+        ".cyberpunk/runs/"
+        "$(configured_worktree_ignore)"
+    )
+    local required_policies=(
+        "  default: integration-branch"
+        "  allow_push: false"
+        "  allow_pull_requests: false"
+        "  allow_deploy: false"
+        "  require_worktrees: true"
+        "  allow_internal_commits: true"
+        "  merge_worker_branches: true"
+        "  allow_protected_branch_merge: false"
+    )
 
     for path in "${REQUIRED_FILES[@]}"; do
         if [[ ! -f "$path" ]]; then
@@ -232,12 +260,25 @@ validate_project() {
         error_count=$((error_count + 1))
     fi
 
-    for entry in "${IGNORE_ENTRIES[@]}"; do
+    for entry in "${ignore_entries[@]}"; do
         if ! ignore_entry_exists "$entry" ".gitignore"; then
             log_error "Missing .gitignore entry: $entry"
             error_count=$((error_count + 1))
         fi
     done
+
+    if [[ -f ".cyberpunk/config.yml" ]]; then
+        for required_policy in "${required_policies[@]}"; do
+            if ! grep -Fqx "$required_policy" .cyberpunk/config.yml; then
+                if [[ "$required_policy" == *"allow_protected_branch_merge"* ]]; then
+                    log_error "Unsafe or missing protected branch policy: $required_policy"
+                else
+                    log_error "Unsafe or missing team policy: $required_policy"
+                fi
+                error_count=$((error_count + 1))
+            fi
+        done
+    fi
 
     if [[ -d "skills/core" ]]; then
         while IFS= read -r skill_path; do
