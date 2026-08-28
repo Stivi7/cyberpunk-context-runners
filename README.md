@@ -22,11 +22,21 @@ Act as The Nexus. Add account recovery with expiring, single-use tokens.
 Deliver the verified integration branch; do not push or open a pull request.
 ```
 
+For a new product, feature, or architectural idea whose requirements still need discovery, invoke The Fixer directly:
+
+```text
+Act as The Fixer. Help me define account recovery before implementation planning.
+```
+
+Nexus also routes materially incomplete product work to The Fixer. The Fixer uses `requirements-discovery`, asks one focused question at a time, and writes an approved PRD to `specs/YYYY-MM-DD-<topic>-prd.md`. After the user reviews the file, The Fixer commits only that PRD on the current named branch and asks whether to hand it to Nexus.
+
 The runtime adapter loads `.cyberpunk/workflow.md`, then Nexus selects only the roles and skills required for the task.
 
 ## Adaptive Workflow
 
 Nexus classifies by risk and uncertainty:
+
+Product discovery precedes engineering classification when a new product, feature, or architectural request still lacks material requirements. Routine fixes, sufficiently specified work, and approved PRDs continue directly through Nexus.
 
 - **quick:** a localized, reversible change following an established pattern
 - **standard:** meaningful behavior spanning several files or moderate uncertainty
@@ -36,9 +46,10 @@ Quick work goes directly to the relevant specialist and Gatekeeper. Standard wor
 
 ## The Engineering Team
 
-The system contains 10 specialized roles:
+The system contains 11 specialized roles:
 
 - **The Nexus:** engineering lead, task router, Git job coordinator, and delivery owner
+- **The Fixer:** product requirements broker for collaborative discovery, approved PRD commits, and explicit Nexus handoff
 - **The Operator:** repository intelligence and verification-command discovery
 - **The Mind:** architecture, interfaces, and proportional implementation planning
 - **The Interrogator:** adversarial review for complex plans
@@ -63,11 +74,13 @@ Every mutating agent assignment receives a worker branch and worktree, even when
 6. Nexus merges approved jobs into the integration branch in dependency order and runs assembled verification.
 7. Completed worktrees are removed after confirmed integration.
 
+Approved PRD authoring is the sole planning-artifact exception: The Fixer may commit only the reviewed PRD on the current named branch before offering handoff. Implementation assignments still use worker branches and worktrees.
+
 The team may create the internal branches, commits, worktrees, and merges needed for this lifecycle. It does not implicitly push, open a pull request, deploy, or merge into a protected branch.
 
 ## Skills
 
-Roles describe ownership; skills describe reusable methods. Core skills cover task classification, repository discovery, planning, plan review, decomposition, worktree isolation, scoped implementation, test-first development, debugging, backend safety, frontend quality, infrastructure safety, code review, verification, and memory curation.
+Roles describe ownership; skills describe reusable methods. Core skills cover requirements discovery, task classification, repository discovery, planning, plan review, decomposition, worktree isolation, scoped implementation, test-first development, debugging, backend safety, frontend quality, infrastructure safety, code review, verification, and memory curation.
 
 Skills are loaded lazily: agents inspect descriptions and then read only those selected for the work packet.
 

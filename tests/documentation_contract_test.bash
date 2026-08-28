@@ -23,7 +23,7 @@ for adapter in "${adapters[@]}"; do
     fi
 done
 
-test_start "README documents the autonomous integration-branch flow"
+test_start "README documents discovery and autonomous integration-branch flow"
 readme="$(<"$REPO_ROOT/README.md")"
 for value in \
     "The Nexus" \
@@ -32,7 +32,11 @@ for value in \
     "complex" \
     "The Daemon" \
     "The Neon" \
-    "10 specialized roles" \
+    "11 specialized roles" \
+    "The Fixer" \
+    "requirements-discovery" \
+    "specs/YYYY-MM-DD-<topic>-prd.md" \
+    "asks whether to hand" \
     "integration branch" \
     "worktree" \
     "skills/project" \
