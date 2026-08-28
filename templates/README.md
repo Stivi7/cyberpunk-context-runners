@@ -1,23 +1,21 @@
-# Cyberpunk Templates
+# Generated Team Templates
 
-This directory contains immutable templates for the Cyberpunk CLI scaffolding tool.
+The CLI copies this tree into a target project. Canonical policy lives under `.cyberpunk/`; runtime adapters only point coding agents to that policy.
 
-## Important Notes
+## Ownership
 
-- **Templates are immutable** and must not be modified by the CLI
-- Users should edit generated files in their projects, not these templates
-- The CLI only reads from this directory and copies content to target projects
-- No token substitution is performed - templates are copied exactly as-is
+- Framework-owned templates may be refreshed with `cyberpunk init --force`.
+- Existing project files are preserved by ordinary initialization.
+- Extra files under `skills/project/` are user-owned and never overwritten or deleted.
+- `.cyberpunk/runs/` is created locally and ignored rather than shipped as tracked history.
 
-## Structure
+## Main Areas
 
-- `agents/` - Agent definition files with roles, inputs, and outputs
-- `examples/` - Example documents and use cases (copied verbatim)
-- `PRPs/` - Product Requirement Prompt templates
-- `plans/` - Planning document templates
-- `tasks/` - Task definition templates
-- `.cursor/rules/rules.mdc` - Cursor IDE rules (copied verbatim)
+- `.cyberpunk/` — configuration, workflow, project context, and curated memory
+- `agents/` — role contracts for The Nexus and the engineering team
+- `skills/core/` — portable framework skills
+- `skills/project/` — explicitly enabled project skills
+- `specs/`, `plans/`, and `tasks/` — durable artifacts created only when useful
+- `AGENTS.md`, `CLAUDE.md`, and Cursor rules — thin runtime adapters
 
-## Usage
-
-These templates are used by the `cyberpunk init` command to scaffold new projects with the standard cyberpunk agent structure.
+The templates do not prescribe a language, framework, package manager, cloud, architecture style, or universal quality threshold. The Operator discovers project-specific commands and conventions from repository evidence.
