@@ -67,7 +67,7 @@ assert_not_contains "$fixer" "- Asking whether to hand the committed PRD to Nexu
 test_start "agent defaults are runtime neutral"
 for agent in "${agents[@]}"; do
     content="$(<"$AGENT_ROOT/$agent.md")"
-    for banned in "AWS" "TypeScript" "npm" "95%"; do
+    for banned in "AWS" "TypeScript" "npm" "95%" "gpt-5.6" "opus" "sonnet" "haiku" "composer-2.5"; do
         assert_not_contains "$content" "$banned" "$agent must not prescribe $banned"
     done
 done

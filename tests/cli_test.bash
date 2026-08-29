@@ -56,6 +56,9 @@ assert_eq 1 "$(line_count '<!-- cyberpunk:start -->' "$codex_project/AGENTS.md")
 assert_eq 1 "$(line_count '<!-- cyberpunk:end -->' "$codex_project/AGENTS.md")" "managed block end count"
 assert_file "$codex_project/.codex/config.toml"
 assert_contains "$(<"$codex_project/.codex/config.toml")" "max_concurrent_threads_per_session = 3"
+assert_file "$codex_project/.codex/agents/nexus.toml"
+[[ ! -e "$codex_project/.claude/agents" ]] || fail "Codex-only init created Claude agents"
+[[ ! -e "$codex_project/.cursor/agents" ]] || fail "Codex-only init created Cursor agents"
 [[ ! -e "$codex_project/CLAUDE.md" ]] || fail "Codex-only init created CLAUDE.md"
 [[ ! -e "$codex_project/.cursor/rules/cyberpunk.mdc" ]] || fail "Codex-only init created Cursor adapter"
 
