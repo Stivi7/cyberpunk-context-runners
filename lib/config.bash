@@ -358,18 +358,86 @@ resolve_role_model() {
     local profile
 
     model="$(role_model_override "$config_path" "$role" "$runtime")"
-    if [[ -n "$model" ]]; then
+    [[ -n "$model" ]] && {
         printf '%s\n' "$model"
         return 0
-    fi
-    profile="$(role_override_profile "$config_path" "$role")"
+    }
+
+    profile="$(role_model_override "$config_path" "$role" profile)"
     [[ -n "$profile" ]] || profile="$(role_profile "$config_path" "$role")"
-    if [[ -n "$profile" ]]; then
-        model="$(profile_model "$config_path" "$profile" "$runtime")"
-        if [[ -n "$model" ]]; then
-            printf '%s\n' "$model"
-            return 0
-        fi
+    model="$(profile_model "$config_path" "$profile" "$runtime")"
+    [[ -n "$model" ]] && printf '%s\n' "$model" || printf '%s\n' inherit
+}
+
+model_fallback() {
+    local config_path="$1"
+
+    awk '
+        $0 == "models:" { in_models=1; next }
+        in_models && /^[^[:space:]]/ { exit }
+        in_models && /^  fallback:[[:space:]]*/ {
+            value=$0
+            sub(/^  fallback:[[:space:]]*/, "", value)
+            print value
+            exit
+        }
+    ' "$config_path" | while IFS= read -r value; do strip_config_scalar "$value"; done
+}
+
+validate_model_configuration() {
+    local config_path="$1"
+    local role
+    local runtime
+    local profile
+    local override_profile
+    local model
+    local fallback
+    local error_count=0
+    local profiles=(deep balanced fast)
+
+    fallback="$(model_fallback "$config_path")"
+    if [[ "$fallback" != inherit ]]; then
+        printf 'Model fallback must be inherit\n' >&2
+        error_count=$((error_count + 1))
     fi
-    printf 'inherit\n'
+
+    for role in "${ROLE_IDS[@]}"; do
+        profile="$(role_profile "$config_path" "$role")"
+        if [[ -z "$profile" ]]; then
+            printf 'Missing model profile for role: %s\n' "$role" >&2
+            error_count=$((error_count + 1))
+        else
+            case "$profile" in
+                deep|balanced|fast) ;;
+                *)
+                    printf 'Invalid model profile for role %s: %s\n' "$role" "$profile" >&2
+                    error_count=$((error_count + 1))
+                    ;;
+            esac
+        fi
+
+        override_profile="$(role_model_override "$config_path" "$role" profile)"
+        if [[ -n "$override_profile" ]]; then
+            case "$override_profile" in
+                deep|balanced|fast) ;;
+                *)
+                    printf 'Invalid model override profile for %s: %s\n' "$role" "$override_profile" >&2
+                    error_count=$((error_count + 1))
+                    ;;
+            esac
+        fi
+    done
+
+    for profile in "${profiles[@]}"; do
+        while IFS= read -r runtime; do
+            [[ -n "$runtime" ]] || continue
+            model="$(profile_model "$config_path" "$profile" "$runtime")"
+            if [[ -z "$model" ]]; then
+                printf 'Missing %s model mapping for profile: %s\n' "$runtime" "$profile" >&2
+                error_count=$((error_count + 1))
+            fi
+        done < <(configured_runtimes "$config_path")
+    done
+
+    [[ "$error_count" -eq 0 ]]
 }
