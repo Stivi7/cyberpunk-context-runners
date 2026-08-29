@@ -247,6 +247,10 @@ cleanup_generated_manifest() {
     local rollback_destination
     local rollback_existed
     local rollback_backup
+    local rollback_install_temp
+    local rollback_backup_dir
+    local rollback_claimed_marker
+    local rollback_installed_marker
 
     if [[ -n "$GENERATED_ACTIVE_TEMP" ]]; then
         discard_temp_file "$GENERATED_ACTIVE_TEMP" || cleanup_status=1
@@ -258,9 +262,17 @@ cleanup_generated_manifest() {
         done < "$GENERATED_STAGED_ASSETS"
     fi
     if [[ -n "$GENERATED_ROLLBACK_LOG" && -f "$GENERATED_ROLLBACK_LOG" ]]; then
-        while IFS=$'\t' read -r rollback_destination rollback_existed rollback_backup; do
-            [[ -n "$rollback_backup" ]] || continue
-            discard_temp_file "$rollback_backup" || cleanup_status=1
+        while IFS=$'\t' read -r rollback_destination rollback_existed rollback_backup rollback_install_temp rollback_backup_dir rollback_claimed_marker rollback_installed_marker; do
+            [[ -z "$rollback_install_temp" || "$rollback_install_temp" == - ]] || discard_temp_file "$rollback_install_temp" || cleanup_status=1
+            [[ -z "$rollback_backup" || "$rollback_backup" == - ]] || discard_temp_file "$rollback_backup" || cleanup_status=1
+            [[ -z "$rollback_claimed_marker" || "$rollback_claimed_marker" == - ]] || discard_temp_file "$rollback_claimed_marker" || cleanup_status=1
+            [[ -z "$rollback_installed_marker" || "$rollback_installed_marker" == - ]] || discard_temp_file "$rollback_installed_marker" || cleanup_status=1
+            if [[ -n "$rollback_backup_dir" && "$rollback_backup_dir" != - ]]; then
+                discard_temp_file "$rollback_backup_dir/installed" || cleanup_status=1
+            fi
+            if [[ -n "$rollback_backup_dir" && "$rollback_backup_dir" != - && -d "$rollback_backup_dir" ]]; then
+                rmdir "$rollback_backup_dir" 2>/dev/null || cleanup_status=1
+            fi
         done < "$GENERATED_ROLLBACK_LOG"
     fi
     if [[ -n "$GENERATED_MANIFEST_WORKDIR" && -d "$GENERATED_MANIFEST_WORKDIR" ]]; then
@@ -586,49 +598,74 @@ EOF
 restore_generated_file() {
     local destination="$1"
     local backup="$2"
-    local temporary
 
     if [[ -f "$destination" && ! -L "$destination" ]] && cmp -s "$destination" "$backup"; then
         return 0
     fi
+    if generated_path_exists "$destination"; then
+        printf 'Refusing to overwrite concurrent content during rollback: %s\n' "$destination" >&2
+        return 1
+    fi
     if ! create_parent_directory "$destination"; then
         return 1
     fi
-    if ! temporary="$(create_sibling_temp "$destination")"; then
-        printf 'Cannot create generated rollback temporary file for: %s\n' "$destination" >&2
+    if ! ln "$backup" "$destination"; then
+        printf 'Cannot restore generated asset without overwriting concurrent content: %s\n' "$destination" >&2
         return 1
     fi
-    GENERATED_ACTIVE_TEMP="$temporary"
-    if ! cp -p "$backup" "$temporary"; then
-        discard_temp_file "$temporary" || true
+}
+
+remove_installed_generated_file() {
+    local destination="$1"
+    local install_temp="$2"
+    local held_destination="$3"
+
+    if ! generated_path_exists "$destination"; then
+        return 0
+    fi
+    if ! mv "$destination" "$held_destination"; then
+        printf 'Cannot atomically claim installed generated asset during rollback: %s\n' "$destination" >&2
         return 1
     fi
-    commit_temp_file "$temporary" "$destination"
+    if [[ -f "$held_destination" && ! -L "$held_destination" &&
+        -f "$install_temp" && ! -L "$install_temp" && "$held_destination" -ef "$install_temp" ]]; then
+        return 0
+    fi
+    if ! ln "$held_destination" "$destination"; then
+        printf 'Concurrent content was claimed during rollback and remains recoverable at: %s\n' "$held_destination" >&2
+        return 1
+    fi
+    printf 'Refusing to remove concurrent content during generated asset rollback: %s\n' "$destination" >&2
+    return 1
 }
 
 rollback_generated_assets() {
     local destination
     local existed
     local backup
+    local install_temp
+    local backup_dir
+    local claimed_marker
+    local installed_marker
     local rollback_status=0
 
     [[ -n "$GENERATED_ROLLBACK_LOG" && -f "$GENERATED_ROLLBACK_LOG" ]] || return 0
-    while IFS=$'\t' read -r destination existed backup; do
+    while IFS=$'\t' read -r destination existed backup install_temp backup_dir claimed_marker installed_marker; do
         [[ -n "$destination" ]] || continue
-        if [[ "$existed" == true ]]; then
-            if [[ ! -f "$backup" || -L "$backup" ]]; then
-                printf 'Generated rollback backup is unavailable for: %s\n' "$destination" >&2
+        if [[ -n "$installed_marker" && "$installed_marker" != - && -f "$installed_marker" ]]; then
+            if ! remove_installed_generated_file "$destination" "$install_temp" "$backup_dir/installed"; then
                 rollback_status=1
-            elif ! restore_generated_file "$destination" "$backup"; then
-                printf 'Cannot restore generated asset during rollback: %s\n' "$destination" >&2
-                rollback_status=1
+                continue
             fi
-        elif generated_path_exists "$destination"; then
-            if [[ ! -f "$destination" || -L "$destination" ]]; then
-                printf 'Refusing to remove non-regular generated asset during rollback: %s\n' "$destination" >&2
-                rollback_status=1
-            elif ! rm -f "$destination"; then
-                printf 'Cannot remove new generated asset during rollback: %s\n' "$destination" >&2
+        fi
+        if [[ "$existed" == true ]]; then
+            if [[ -f "$backup" && ! -L "$backup" ]]; then
+                if ! restore_generated_file "$destination" "$backup"; then
+                    printf 'Cannot restore generated asset during rollback: %s\n' "$destination" >&2
+                    rollback_status=1
+                fi
+            elif [[ -n "$claimed_marker" && -f "$claimed_marker" ]]; then
+                printf 'Generated rollback backup is unavailable for: %s\n' "$destination" >&2
                 rollback_status=1
             fi
         fi
@@ -640,13 +677,35 @@ discard_generated_rollback_backups() {
     local destination
     local existed
     local backup
+    local install_temp
+    local backup_dir
+    local claimed_marker
+    local installed_marker
     local discard_status=0
 
-    while IFS=$'\t' read -r destination existed backup; do
-        [[ -n "$backup" ]] || continue
-        discard_temp_file "$backup" || discard_status=1
+    while IFS=$'\t' read -r destination existed backup install_temp backup_dir claimed_marker installed_marker; do
+        [[ -z "$backup" || "$backup" == - ]] || discard_temp_file "$backup" || discard_status=1
+        [[ -z "$install_temp" || "$install_temp" == - ]] || discard_temp_file "$install_temp" || discard_status=1
+        [[ -z "$claimed_marker" || "$claimed_marker" == - ]] || discard_temp_file "$claimed_marker" || discard_status=1
+        [[ -z "$installed_marker" || "$installed_marker" == - ]] || discard_temp_file "$installed_marker" || discard_status=1
+        if [[ -n "$backup_dir" && "$backup_dir" != - ]]; then
+            discard_temp_file "$backup_dir/installed" || discard_status=1
+        fi
+        if [[ -n "$backup_dir" && "$backup_dir" != - && -d "$backup_dir" ]]; then
+            rmdir "$backup_dir" 2>/dev/null || discard_status=1
+        fi
     done < "$GENERATED_ROLLBACK_LOG"
     return "$discard_status"
+}
+
+install_generated_file_no_clobber() {
+    local temporary="$1"
+    local destination="$2"
+
+    if ! ln "$temporary" "$destination"; then
+        printf 'Generated asset no-clobber install failed because the destination appeared concurrently: %s\n' "$destination" >&2
+        return 1
+    fi
 }
 
 install_staged_generated_assets() {
@@ -657,6 +716,13 @@ install_staged_generated_assets() {
     local actual_hash
     local existed
     local backup
+    local backup_dir
+    local claimed_marker
+    local installed_marker
+    local install_temp
+    local destination_dir
+    local destination_display_dir
+    local destination_name
 
     if ! LC_ALL=C sort -t $'\t' -k1,1 "$GENERATED_STAGED_ASSETS" > "$GENERATED_STAGED_SORTED"; then
         return 1
@@ -699,32 +765,82 @@ install_staged_generated_assets() {
             return 1
         fi
 
+        destination_display_dir="$(dirname "$destination")"
+        destination_dir="$(cd "$destination_display_dir" && pwd -P)"
+        destination_name="$(basename "$destination")"
+        if ! install_temp="$(create_sibling_temp "$destination_dir/$destination_name")"; then
+            printf 'Cannot create generated asset temporary file in: %s\n' "$destination_display_dir" >&2
+            return 1
+        fi
+        GENERATED_ACTIVE_TEMP="$install_temp"
+        if ! cp "$staged_content" "$install_temp"; then
+            discard_temp_file "$install_temp" || true
+            return 1
+        fi
+
         existed=false
-        backup=""
-        if generated_path_exists "$destination"; then
-            if [[ ! -f "$destination" || -L "$destination" ]]; then
-                printf 'Generated asset changed to a non-regular destination before commit: %s\n' "$destination" >&2
-                return 1
-            fi
-            if ! backup="$(mktemp "$GENERATED_MANIFEST_WORKDIR/backup.XXXXXX")"; then
-                printf 'Cannot create generated rollback backup for: %s\n' "$destination" >&2
-                return 1
-            fi
-            GENERATED_ACTIVE_TEMP="$backup"
-            if ! cp -p "$destination" "$backup"; then
-                discard_temp_file "$backup" || true
-                return 1
-            fi
+        backup="-"
+        if ! backup_dir="$(mktemp -d "$destination_dir/.$destination_name.rollback.XXXXXX")"; then
+            printf 'Cannot create generated rollback directory for: %s\n' "$destination" >&2
+            discard_temp_file "$install_temp" || true
+            return 1
+        fi
+        claimed_marker="-"
+        installed_marker="$backup_dir/installed-claimed"
+        if [[ "$expected_state" == present ]]; then
+            backup="$backup_dir/original"
+            claimed_marker="$backup_dir/claimed"
             existed=true
         fi
-        if ! printf '%s\t%s\t%s\n' "$destination" "$existed" "$backup" >> "$GENERATED_ROLLBACK_LOG"; then
-            [[ -z "$backup" ]] || discard_temp_file "$backup" || true
+
+        mask_generated_commit_signals
+        if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$destination" "$existed" "$backup" "$install_temp" "$backup_dir" "$claimed_marker" "$installed_marker" \
+            >> "$GENERATED_ROLLBACK_LOG"; then
+            resume_generated_transaction_signals
+            discard_temp_file "$install_temp" || true
+            rmdir "$backup_dir" 2>/dev/null || true
             return 1
         fi
         GENERATED_ACTIVE_TEMP=""
-        if ! replace_generated_file "$destination" "$staged_content"; then
+
+        if [[ "$expected_state" == present ]]; then
+            if ! mv "$destination" "$backup"; then
+                resume_generated_transaction_signals
+                return 1
+            fi
+            if ! : > "$claimed_marker"; then
+                resume_generated_transaction_signals
+                return 1
+            fi
+        fi
+        resume_generated_transaction_signals
+
+        if [[ "$expected_state" == present ]]; then
+            if [[ ! -f "$backup" || -L "$backup" ]]; then
+                printf 'Generated asset changed type during atomic claim: %s\n' "$destination" >&2
+                return 1
+            fi
+            if ! actual_hash="$(sha256_file "$backup")"; then
+                return 1
+            fi
+            if [[ "$actual_hash" != "$expected_hash" ]]; then
+                printf 'Generated asset changed during atomic claim: %s\n' "$destination" >&2
+                return 1
+            fi
+        fi
+
+        mask_generated_commit_signals
+        if ! : > "$installed_marker"; then
+            resume_generated_transaction_signals
             return 1
         fi
+        if ! install_generated_file_no_clobber "$install_temp" "$destination"; then
+            discard_temp_file "$installed_marker" || true
+            resume_generated_transaction_signals
+            return 1
+        fi
+        resume_generated_transaction_signals
     done < "$GENERATED_STAGED_SORTED"
 }
 
