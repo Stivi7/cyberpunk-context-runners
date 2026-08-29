@@ -251,6 +251,7 @@ cleanup_generated_manifest() {
     local rollback_backup_dir
     local rollback_claimed_marker
     local rollback_installed_marker
+    local rollback_desired_hash
 
     if [[ -n "$GENERATED_ACTIVE_TEMP" ]]; then
         discard_temp_file "$GENERATED_ACTIVE_TEMP" || cleanup_status=1
@@ -262,7 +263,7 @@ cleanup_generated_manifest() {
         done < "$GENERATED_STAGED_ASSETS"
     fi
     if [[ -n "$GENERATED_ROLLBACK_LOG" && -f "$GENERATED_ROLLBACK_LOG" ]]; then
-        while IFS=$'\t' read -r rollback_destination rollback_existed rollback_backup rollback_install_temp rollback_backup_dir rollback_claimed_marker rollback_installed_marker; do
+        while IFS=$'\t' read -r rollback_destination rollback_existed rollback_backup rollback_install_temp rollback_backup_dir rollback_claimed_marker rollback_installed_marker rollback_desired_hash; do
             [[ -z "$rollback_install_temp" || "$rollback_install_temp" == - ]] || discard_temp_file "$rollback_install_temp" || cleanup_status=1
             [[ -z "$rollback_backup" || "$rollback_backup" == - ]] || discard_temp_file "$rollback_backup" || cleanup_status=1
             [[ -z "$rollback_claimed_marker" || "$rollback_claimed_marker" == - ]] || discard_temp_file "$rollback_claimed_marker" || cleanup_status=1
@@ -618,7 +619,9 @@ restore_generated_file() {
 remove_installed_generated_file() {
     local destination="$1"
     local install_temp="$2"
-    local held_destination="$3"
+    local desired_hash="$3"
+    local held_destination="$4"
+    local actual_hash
 
     if ! generated_path_exists "$destination"; then
         return 0
@@ -629,7 +632,9 @@ remove_installed_generated_file() {
     fi
     if [[ -f "$held_destination" && ! -L "$held_destination" &&
         -f "$install_temp" && ! -L "$install_temp" && "$held_destination" -ef "$install_temp" ]]; then
-        return 0
+        if actual_hash="$(sha256_file "$held_destination")" && [[ "$actual_hash" == "$desired_hash" ]]; then
+            return 0
+        fi
     fi
     if ! ln "$held_destination" "$destination"; then
         printf 'Concurrent content was claimed during rollback and remains recoverable at: %s\n' "$held_destination" >&2
@@ -647,13 +652,14 @@ rollback_generated_assets() {
     local backup_dir
     local claimed_marker
     local installed_marker
+    local desired_hash
     local rollback_status=0
 
     [[ -n "$GENERATED_ROLLBACK_LOG" && -f "$GENERATED_ROLLBACK_LOG" ]] || return 0
-    while IFS=$'\t' read -r destination existed backup install_temp backup_dir claimed_marker installed_marker; do
+    while IFS=$'\t' read -r destination existed backup install_temp backup_dir claimed_marker installed_marker desired_hash; do
         [[ -n "$destination" ]] || continue
         if [[ -n "$installed_marker" && "$installed_marker" != - && -f "$installed_marker" ]]; then
-            if ! remove_installed_generated_file "$destination" "$install_temp" "$backup_dir/installed"; then
+            if ! remove_installed_generated_file "$destination" "$install_temp" "$desired_hash" "$backup_dir/installed"; then
                 rollback_status=1
                 continue
             fi
@@ -681,9 +687,10 @@ discard_generated_rollback_backups() {
     local backup_dir
     local claimed_marker
     local installed_marker
+    local desired_hash
     local discard_status=0
 
-    while IFS=$'\t' read -r destination existed backup install_temp backup_dir claimed_marker installed_marker; do
+    while IFS=$'\t' read -r destination existed backup install_temp backup_dir claimed_marker installed_marker desired_hash; do
         [[ -z "$backup" || "$backup" == - ]] || discard_temp_file "$backup" || discard_status=1
         [[ -z "$install_temp" || "$install_temp" == - ]] || discard_temp_file "$install_temp" || discard_status=1
         [[ -z "$claimed_marker" || "$claimed_marker" == - ]] || discard_temp_file "$claimed_marker" || discard_status=1
@@ -723,6 +730,7 @@ install_staged_generated_assets() {
     local destination_dir
     local destination_display_dir
     local destination_name
+    local desired_hash
 
     if ! LC_ALL=C sort -t $'\t' -k1,1 "$GENERATED_STAGED_ASSETS" > "$GENERATED_STAGED_SORTED"; then
         return 1
@@ -764,6 +772,9 @@ install_staged_generated_assets() {
         if ! create_parent_directory "$destination"; then
             return 1
         fi
+        if ! desired_hash="$(sha256_file "$staged_content")"; then
+            return 1
+        fi
 
         destination_display_dir="$(dirname "$destination")"
         destination_dir="$(cd "$destination_display_dir" && pwd -P)"
@@ -794,8 +805,8 @@ install_staged_generated_assets() {
         fi
 
         mask_generated_commit_signals
-        if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$destination" "$existed" "$backup" "$install_temp" "$backup_dir" "$claimed_marker" "$installed_marker" \
+        if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$destination" "$existed" "$backup" "$install_temp" "$backup_dir" "$claimed_marker" "$installed_marker" "$desired_hash" \
             >> "$GENERATED_ROLLBACK_LOG"; then
             resume_generated_transaction_signals
             discard_temp_file "$install_temp" || true

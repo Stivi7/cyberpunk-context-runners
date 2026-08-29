@@ -154,6 +154,33 @@ EOF
     chmod +x "$wrapper_dir/cp" "$wrapper_dir/mv"
 }
 
+make_installed_edit_then_failure_wrapper() {
+    local wrapper_dir="$1"
+
+    mkdir -p "$wrapper_dir"
+    cat > "$wrapper_dir/ln" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+destination_path=""
+for argument in "$@"; do
+    case "$argument" in
+        -*) continue ;;
+        *) destination_path="$argument" ;;
+    esac
+done
+absolute_destination="$(cd "$(dirname "$destination_path")" && pwd -P)/$(basename "$destination_path")"
+absolute_failure_target="$(cd "$(dirname "$CYBERPUNK_ROLLBACK_FAILURE_TARGET")" && pwd -P)/$(basename "$CYBERPUNK_ROLLBACK_FAILURE_TARGET")"
+if [[ "$absolute_destination" == "$absolute_failure_target" && ! -e "$CYBERPUNK_ROLLBACK_HOOK_MARKER" ]]; then
+    printf '%s\n' 'rollback-user-edit' >> "$CYBERPUNK_ROLLBACK_EDIT_TARGET"
+    /bin/cp "$CYBERPUNK_ROLLBACK_EDIT_TARGET" "$CYBERPUNK_ROLLBACK_EDIT_WITNESS"
+    : > "$CYBERPUNK_ROLLBACK_HOOK_MARKER"
+    exit 73
+fi
+exec /bin/ln "$@"
+EOF
+    chmod +x "$wrapper_dir/ln"
+}
+
 run_cli_with_target_hook() {
     local project="$1"
     local path_prefix="$2"
@@ -162,6 +189,25 @@ run_cli_with_target_hook() {
     (
         cd "$project"
         CYBERPUNK_POSTCHECK_TARGET="$target" \
+        PATH="$path_prefix:$PATH" \
+            "$CYBERPUNK_BIN" "$@"
+    )
+}
+
+run_cli_with_installed_edit_then_failure() {
+    local project="$1"
+    local path_prefix="$2"
+    local edit_target="$3"
+    local failure_target="$4"
+    local hook_marker="$5"
+    local edit_witness="$6"
+    shift 6
+    (
+        cd "$project"
+        CYBERPUNK_ROLLBACK_EDIT_TARGET="$edit_target" \
+        CYBERPUNK_ROLLBACK_FAILURE_TARGET="$failure_target" \
+        CYBERPUNK_ROLLBACK_HOOK_MARKER="$hook_marker" \
+        CYBERPUNK_ROLLBACK_EDIT_WITNESS="$edit_witness" \
         PATH="$path_prefix:$PATH" \
             "$CYBERPUNK_BIN" "$@"
     )
@@ -616,6 +662,48 @@ assert_contains "$COMMAND_OUTPUT" "changed during atomic claim" "post-check pres
 assert_contains "$(<"$postcheck_present_target")" 'post-check-user-drift' "post-check present drift was overwritten"
 assert_eq "$postcheck_present_manifest_before" "$(cksum "$postcheck_present_project/.cyberpunk/generated.yml")" "post-check present drift changed the manifest"
 assert_eq "$postcheck_present_fixer_before" "$(cksum "$postcheck_present_project/.codex/agents/fixer.toml")" "post-check present drift did not roll back an earlier install"
+
+test_start "an in-place edit of an installed asset is preserved when a later install fails"
+rollback_edit_project="$SANDBOX_ROOT/rollback-installed-edit"
+mkdir -p "$rollback_edit_project"
+assert_exit 0 run_cli "$rollback_edit_project" init --runtime codex
+rollback_edit_manifest_before="$(cksum "$rollback_edit_project/.cyberpunk/generated.yml")"
+rollback_edit_fixer_before="$(cksum "$rollback_edit_project/.codex/agents/fixer.toml" | awk '{ print $1 " " $2 }')"
+replace_exact_line "$rollback_edit_project/.cyberpunk/config.yml" '      codex: "gpt-5.6-sol"' '      codex: "rollback-race-model"'
+rollback_edit_wrapper="$SANDBOX_ROOT/rollback-installed-edit-bin"
+make_installed_edit_then_failure_wrapper "$rollback_edit_wrapper"
+rollback_edit_target="$rollback_edit_project/.codex/agents/fixer.toml"
+rollback_failure_target="$rollback_edit_project/.codex/agents/mind.toml"
+rollback_hook_marker="$SANDBOX_ROOT/rollback-installed-edit-fired"
+rollback_edit_witness="$SANDBOX_ROOT/rollback-installed-edit-witness"
+capture run_cli_with_installed_edit_then_failure \
+    "$rollback_edit_project" \
+    "$rollback_edit_wrapper" \
+    "$rollback_edit_target" \
+    "$rollback_failure_target" \
+    "$rollback_hook_marker" \
+    "$rollback_edit_witness" \
+    sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_file "$rollback_hook_marker"
+assert_contains "$COMMAND_OUTPUT" "no-clobber install" "later install failure was not exercised"
+assert_contains "$(<"$rollback_edit_target")" 'rollback-user-edit' "rollback discarded the concurrent in-place edit"
+assert_contains "$(<"$rollback_edit_target")" 'model = "rollback-race-model"' "rollback did not preserve the edited installed bytes"
+assert_eq \
+    "$(cksum "$rollback_edit_witness" | awk '{ print $1 " " $2 }')" \
+    "$(cksum "$rollback_edit_target" | awk '{ print $1 " " $2 }')" \
+    "rollback did not preserve every concurrently edited byte"
+assert_eq "$rollback_edit_manifest_before" "$(cksum "$rollback_edit_project/.cyberpunk/generated.yml")" "in-place rollback race changed the manifest"
+rollback_edit_workspace="$(printf '%s\n' "$COMMAND_OUTPUT" | sed -n 's/^Generated asset recovery workspace preserved: //p' | tail -n 1)"
+[[ -n "$rollback_edit_workspace" ]] || fail "in-place rollback race did not report a recovery workspace"
+assert_dir "$rollback_edit_workspace"
+rollback_edit_backup="$(awk -F '\t' '$1 == ".codex/agents/fixer.toml" { print $3; exit }' "$rollback_edit_workspace/rollback.tsv")"
+assert_file "$rollback_edit_backup"
+assert_eq "$rollback_edit_fixer_before" "$(cksum "$rollback_edit_backup" | awk '{ print $1 " " $2 }')" "in-place rollback recovery lost the prior Fixer bytes"
+case "$rollback_edit_workspace" in
+    "${TMPDIR:-/tmp}"/cyberpunk-generated.*) rm -rf "$rollback_edit_workspace" ;;
+    *) fail "refusing to clean unexpected recovery workspace: $rollback_edit_workspace" ;;
+esac
 
 test_start "an absent destination appearing after revalidation is not clobbered"
 postcheck_absent_project="$SANDBOX_ROOT/postcheck-absent"
