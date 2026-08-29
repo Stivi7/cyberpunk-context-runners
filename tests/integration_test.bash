@@ -39,6 +39,7 @@ workflow:
   levels: [quick, standard, complex]
   repair_cycles_before_rediagnosis: 2
   unresolved_cycles_before_escalation: 3
+  project_workflow_note: preserve-this-workflow-line
 
 git:
   integration_branch: auto
@@ -56,11 +57,15 @@ memory:
   tracked: [.cyberpunk/project.md, .cyberpunk/memory]
   local: .cyberpunk/runs
   promote_only_validated_lessons: true
+  project_memory_note: preserve-this-memory-line
 
 skills:
   core_path: skills/core
   project_path: skills/project
   enabled_project: []
+
+project_owned:
+  team_note: preserve-this-project-owned-line
 EOF
 }
 
@@ -88,8 +93,11 @@ legacy_project="$SANDBOX_ROOT/legacy"
 mkdir -p "$legacy_project/.cyberpunk"
 write_legacy_config "$legacy_project/.cyberpunk/config.yml"
 legacy_delivery_before="$(section_text "$legacy_project/.cyberpunk/config.yml" delivery)"
+legacy_workflow_before="$(section_text "$legacy_project/.cyberpunk/config.yml" workflow)"
 legacy_git_before="$(section_text "$legacy_project/.cyberpunk/config.yml" git)"
+legacy_memory_before="$(section_text "$legacy_project/.cyberpunk/config.yml" memory)"
 legacy_skills_before="$(section_text "$legacy_project/.cyberpunk/config.yml" skills)"
+legacy_project_owned_before="$(section_text "$legacy_project/.cyberpunk/config.yml" project_owned)"
 assert_exit 0 run_cli "$legacy_project" sync
 legacy_config="$legacy_project/.cyberpunk/config.yml"
 assert_contains "$(<"$legacy_config")" "version: 2"
@@ -97,8 +105,11 @@ for value in "runtimes:" "execution:" "models:"; do
     assert_contains "$(<"$legacy_config")" "$value" "legacy migration"
 done
 assert_eq "$legacy_delivery_before" "$(section_text "$legacy_config" delivery)" "delivery policy changed during migration"
+assert_eq "$legacy_workflow_before" "$(section_text "$legacy_config" workflow)" "workflow policy changed during migration"
 assert_eq "$legacy_git_before" "$(section_text "$legacy_config" git)" "git policy changed during migration"
+assert_eq "$legacy_memory_before" "$(section_text "$legacy_config" memory)" "memory policy changed during migration"
 assert_eq "$legacy_skills_before" "$(section_text "$legacy_config" skills)" "skills policy changed during migration"
+assert_eq "$legacy_project_owned_before" "$(section_text "$legacy_config" project_owned)" "project-owned policy changed during migration"
 legacy_checksum_before="$(cksum "$legacy_config")"
 assert_exit 0 run_cli "$legacy_project" sync
 legacy_checksum_after="$(cksum "$legacy_config")"
