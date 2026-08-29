@@ -17,6 +17,37 @@ run_cli() {
     (cd "$target" && "$CYBERPUNK_BIN" "$@")
 }
 
+write_generated_fixture() {
+    local target="$1"
+    local destination="$2"
+    local source="$3"
+    local identifier="$4"
+    local content_file="$5"
+
+    (
+        cd "$target"
+        DRY_RUN=false
+        FORCE=false
+        source "$REPO_ROOT/lib/generated-assets.bash"
+        begin_generated_manifest ".cyberpunk/generated.yml" || exit 1
+        write_generated_asset "$destination" "$source" "cursor" "adapter" "$identifier" "$content_file" || exit 1
+        finish_generated_manifest
+    )
+}
+
+reload_generated_manifest() {
+    local target="$1"
+
+    (
+        cd "$target"
+        DRY_RUN=false
+        FORCE=false
+        source "$REPO_ROOT/lib/generated-assets.bash"
+        begin_generated_manifest ".cyberpunk/generated.yml" || exit 1
+        finish_generated_manifest
+    )
+}
+
 line_count() {
     local value="$1"
     local path="$2"
@@ -168,6 +199,135 @@ capture run_cli "$collision_project" init --runtime cursor --force
 assert_eq 1 "$COMMAND_STATUS"
 assert_contains "$COMMAND_OUTPUT" "collision"
 assert_eq "$collision_before" "$(cksum "$collision_project/.cursor/rules/cyberpunk.mdc")" "force overwrote an unowned collision"
+
+test_start "non-regular Cursor destinations are unowned collisions"
+symlink_project="$SANDBOX_ROOT/symlink-collision"
+mkdir -p "$symlink_project/.cursor/rules"
+ln -s "missing-user-target" "$symlink_project/.cursor/rules/cyberpunk.mdc"
+capture run_cli "$symlink_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+[[ -L "$symlink_project/.cursor/rules/cyberpunk.mdc" ]] || fail "dangling symlink collision was replaced"
+
+fifo_project="$SANDBOX_ROOT/fifo-collision"
+mkdir -p "$fifo_project/.cursor/rules"
+mkfifo "$fifo_project/.cursor/rules/cyberpunk.mdc"
+capture run_cli "$fifo_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+[[ -p "$fifo_project/.cursor/rules/cyberpunk.mdc" ]] || fail "FIFO collision was replaced"
+
+directory_project="$SANDBOX_ROOT/directory-collision"
+mkdir -p "$directory_project/.cursor/rules/cyberpunk.mdc"
+capture run_cli "$directory_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+assert_eq "" "$(find "$directory_project/.cursor/rules/cyberpunk.mdc" -mindepth 1 -print)" "directory collision contains a generated temp artifact"
+
+test_start "failed generated writes do not create ownership records"
+write_failure_project="$SANDBOX_ROOT/write-failure"
+mkdir -p "$write_failure_project/.cursor/rules"
+chmod 500 "$write_failure_project/.cursor/rules"
+capture run_cli "$write_failure_project" init --runtime cursor
+chmod 700 "$write_failure_project/.cursor/rules"
+assert_eq 1 "$COMMAND_STATUS"
+[[ ! -e "$write_failure_project/.cyberpunk/generated.yml" ]] || fail "failed asset write committed an ownership manifest"
+assert_eq "" "$(find "$write_failure_project/.cursor/rules" -maxdepth 1 -name '.cyberpunk.mdc.tmp.*' -print)" "failed asset write left a sibling temp file"
+
+test_start "Codex settings accept commented agents and array-table boundaries"
+toml_project="$SANDBOX_ROOT/toml-headers"
+mkdir -p "$toml_project/.codex"
+printf '%s\n' \
+    '[agents] # user policy' \
+    'enabled = false' \
+    'default_model = "user-model"' \
+    '[[agents.pool]] # user pool' \
+    'name = "primary"' > "$toml_project/.codex/config.toml"
+assert_exit 0 run_cli "$toml_project" init --runtime codex
+toml_content="$(<"$toml_project/.codex/config.toml")"
+assert_eq 1 "$(grep -Ec '^[[:space:]]*\[agents\]' "$toml_project/.codex/config.toml")" "commented agents table was duplicated"
+assert_contains "$toml_content" 'enabled = false'
+assert_contains "$toml_content" 'default_model = "user-model"'
+concurrency_line="$(grep -n '^max_concurrent_threads_per_session = 3$' "$toml_project/.codex/config.toml" | cut -d: -f1)"
+array_table_line="$(grep -n '^\[\[agents.pool\]\]' "$toml_project/.codex/config.toml" | cut -d: -f1)"
+[[ "$concurrency_line" -lt "$array_table_line" ]] || fail "Codex concurrency was inserted inside an array table"
+
+test_start "malformed and unsupported generated manifests fail before synchronization writes"
+malformed_manifest_project="$SANDBOX_ROOT/malformed-manifest"
+mkdir -p "$malformed_manifest_project"
+assert_exit 0 run_cli "$malformed_manifest_project" init --runtime cursor
+printf '%s\n' 'garbage: true' > "$malformed_manifest_project/.cyberpunk/generated.yml"
+cursor_before_malformed="$(cksum "$malformed_manifest_project/.cursor/rules/cyberpunk.mdc")"
+capture run_cli "$malformed_manifest_project" sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Malformed generated asset manifest"
+assert_eq "$cursor_before_malformed" "$(cksum "$malformed_manifest_project/.cursor/rules/cyberpunk.mdc")" "malformed manifest allowed an asset write"
+
+unsupported_manifest_project="$SANDBOX_ROOT/unsupported-manifest"
+mkdir -p "$unsupported_manifest_project"
+assert_exit 0 run_cli "$unsupported_manifest_project" init --runtime cursor
+printf '%s\n' 'version: 2' 'assets: []' > "$unsupported_manifest_project/.cyberpunk/generated.yml"
+cursor_before_unsupported="$(cksum "$unsupported_manifest_project/.cursor/rules/cyberpunk.mdc")"
+capture run_cli "$unsupported_manifest_project" sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Unsupported generated asset manifest version"
+assert_eq "$cursor_before_unsupported" "$(cksum "$unsupported_manifest_project/.cursor/rules/cyberpunk.mdc")" "unsupported manifest allowed an asset write"
+
+test_start "generated manifest rendering round-trips escaped fields"
+roundtrip_project="$SANDBOX_ROOT/manifest-roundtrip"
+mkdir -p "$roundtrip_project"
+roundtrip_content="$roundtrip_project/content.mdc"
+printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->' 'escaped fixture' > "$roundtrip_content"
+roundtrip_destination='.cursor/rules/quoted"asset\fixture.mdc'
+roundtrip_source='canonical/quoted"source\fixture.md'
+roundtrip_identifier='quoted"identifier\fixture'
+assert_exit 0 write_generated_fixture "$roundtrip_project" "$roundtrip_destination" "$roundtrip_source" "$roundtrip_identifier" "$roundtrip_content"
+roundtrip_manifest_before="$(cksum "$roundtrip_project/.cyberpunk/generated.yml")"
+assert_exit 0 reload_generated_manifest "$roundtrip_project"
+assert_eq "$roundtrip_manifest_before" "$(cksum "$roundtrip_project/.cyberpunk/generated.yml")" "escaped manifest fields did not round-trip"
+assert_contains "$(<"$roundtrip_project/.cyberpunk/generated.yml")" 'quoted\"asset\\fixture.mdc'
+
+test_start "generated writers do not follow predictable sibling temp symlinks"
+temp_attack_project="$SANDBOX_ROOT/temp-symlink"
+mkdir -p "$temp_attack_project/.cursor/rules" "$temp_attack_project/.cyberpunk"
+temp_attack_content="$temp_attack_project/content.mdc"
+printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->' 'safe generated content' > "$temp_attack_content"
+printf '%s\n' 'asset-temp-user-sentinel' > "$temp_attack_project/asset-user.txt"
+printf '%s\n' 'manifest-temp-user-sentinel' > "$temp_attack_project/manifest-user.txt"
+ln -s "$temp_attack_project/asset-user.txt" "$temp_attack_project/.cursor/rules/.cyberpunk.mdc.tmp.$$"
+ln -s "$temp_attack_project/manifest-user.txt" "$temp_attack_project/.cyberpunk/.generated.yml.tmp.$$"
+assert_exit 0 write_generated_fixture "$temp_attack_project" ".cursor/rules/cyberpunk.mdc" ".cyberpunk/workflow.md" "cyberpunk" "$temp_attack_content"
+assert_eq "asset-temp-user-sentinel" "$(<"$temp_attack_project/asset-user.txt")" "asset temp symlink target was overwritten"
+assert_eq "manifest-temp-user-sentinel" "$(<"$temp_attack_project/manifest-user.txt")" "manifest temp symlink target was overwritten"
+[[ -f "$temp_attack_project/.cursor/rules/cyberpunk.mdc" && ! -L "$temp_attack_project/.cursor/rules/cyberpunk.mdc" ]] || fail "generated destination is not a regular file"
+
+test_start "generated manifest work directories are cleaned on interruption"
+interruption_project="$SANDBOX_ROOT/interruption-cleanup"
+mkdir -p "$interruption_project"
+interruption_ready="$interruption_project/ready"
+bash -c '
+    set -euo pipefail
+    cd "$1"
+    source "$2"
+    begin_generated_manifest ".cyberpunk/generated.yml"
+    printf "%s\n" "$GENERATED_MANIFEST_WORKDIR" > "$3"
+    while :; do :; done
+' _ "$interruption_project" "$REPO_ROOT/lib/generated-assets.bash" "$interruption_ready" &
+interruption_pid=$!
+interruption_attempt=0
+while [[ ! -s "$interruption_ready" && "$interruption_attempt" -lt 100 ]]; do
+    sleep 0.05
+    interruption_attempt=$((interruption_attempt + 1))
+done
+[[ -s "$interruption_ready" ]] || fail "interruption fixture did not start"
+interrupted_workdir="$(<"$interruption_ready")"
+kill -TERM "$interruption_pid"
+set +e
+wait "$interruption_pid"
+interruption_status=$?
+set -e
+[[ "$interruption_status" -ne 0 ]] || fail "interrupted manifest process exited successfully"
+[[ ! -e "$interrupted_workdir" ]] || fail "interrupted manifest process left work directory: $interrupted_workdir"
 
 test_start "generated Cursor drift is preserved unless force is requested"
 cursor_rule="$coexist_project/.cursor/rules/cyberpunk.mdc"
