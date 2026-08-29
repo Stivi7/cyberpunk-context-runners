@@ -5,6 +5,11 @@ GENERATED_MANIFEST_INDEX=""
 GENERATED_MANIFEST_RECORDS=""
 GENERATED_MANIFEST_WORKDIR=""
 GENERATED_MANIFEST_FAILED=false
+GENERATED_ACTIVE_TEMP=""
+GENERATED_PREVIOUS_HUP_TRAP=""
+GENERATED_PREVIOUS_INT_TRAP=""
+GENERATED_PREVIOUS_TERM_TRAP=""
+GENERATED_SIGNAL_TRAPS_ACTIVE=false
 
 sha256_file() {
     local path="$1"
@@ -19,61 +24,229 @@ sha256_file() {
     fi
 }
 
+create_parent_directory() {
+    local path="$1"
+    local directory
+
+    directory="$(dirname "$path")"
+    if ! mkdir -p "$directory"; then
+        printf 'Cannot create parent directory: %s\n' "$directory" >&2
+        return 1
+    fi
+}
+
+create_sibling_temp() {
+    local path="$1"
+    local directory
+    local basename_value
+
+    directory="$(dirname "$path")"
+    basename_value="$(basename "$path")"
+    mktemp "$directory/.$basename_value.tmp.XXXXXX"
+}
+
+discard_temp_file() {
+    local path="$1"
+    local status=0
+
+    [[ -n "$path" ]] || return 0
+    if [[ -e "$path" || -L "$path" ]]; then
+        rm -f "$path" || status=$?
+    fi
+    if [[ "$status" -eq 0 && "$GENERATED_ACTIVE_TEMP" == "$path" ]]; then
+        GENERATED_ACTIVE_TEMP=""
+    fi
+    return "$status"
+}
+
+commit_temp_file() {
+    local temporary="$1"
+    local destination="$2"
+
+    if generated_path_exists "$destination" && [[ ! -f "$destination" || -L "$destination" ]]; then
+        printf 'Refusing to replace non-regular destination: %s\n' "$destination" >&2
+        discard_temp_file "$temporary" || true
+        return 1
+    elif [[ -f "$destination" ]] && cmp -s "$temporary" "$destination"; then
+        if ! discard_temp_file "$temporary"; then
+            return 1
+        fi
+    elif ! mv "$temporary" "$destination"; then
+        discard_temp_file "$temporary" || true
+        return 1
+    elif [[ "$GENERATED_ACTIVE_TEMP" == "$temporary" ]]; then
+        GENERATED_ACTIVE_TEMP=""
+    fi
+}
+
+install_generated_signal_traps() {
+    GENERATED_PREVIOUS_HUP_TRAP="$(trap -p HUP || true)"
+    GENERATED_PREVIOUS_INT_TRAP="$(trap -p INT || true)"
+    GENERATED_PREVIOUS_TERM_TRAP="$(trap -p TERM || true)"
+    GENERATED_SIGNAL_TRAPS_ACTIVE=true
+    trap 'cleanup_generated_manifest; exit 129' HUP
+    trap 'cleanup_generated_manifest; exit 130' INT
+    trap 'cleanup_generated_manifest; exit 143' TERM
+}
+
+restore_generated_signal_traps() {
+    local previous_hup="$GENERATED_PREVIOUS_HUP_TRAP"
+    local previous_int="$GENERATED_PREVIOUS_INT_TRAP"
+    local previous_term="$GENERATED_PREVIOUS_TERM_TRAP"
+
+    [[ "$GENERATED_SIGNAL_TRAPS_ACTIVE" == true ]] || return 0
+    trap - HUP INT TERM
+    GENERATED_PREVIOUS_HUP_TRAP=""
+    GENERATED_PREVIOUS_INT_TRAP=""
+    GENERATED_PREVIOUS_TERM_TRAP=""
+    GENERATED_SIGNAL_TRAPS_ACTIVE=false
+    [[ -z "$previous_hup" ]] || eval "$previous_hup"
+    [[ -z "$previous_int" ]] || eval "$previous_int"
+    [[ -z "$previous_term" ]] || eval "$previous_term"
+}
+
 load_generated_manifest_records() {
     local manifest_path="$1"
     local records_path="$2"
 
     awk '
-        BEGIN { OFS="\t" }
-        function scalar(line) {
-            sub(/^[^:]*:[[:space:]]*/, "", line)
-            if (line ~ /^".*"$/) {
-                sub(/^"/, "", line)
-                sub(/"$/, "", line)
-            }
-            return line
+        BEGIN {
+            OFS="\t"
+            state="version"
         }
-        function flush_record() {
-            if (!record_started) return
-            if (path == "" || source == "" || runtime == "" || kind == "" || identifier == "" || sha256 == "") {
+        function decode_quoted(raw,    decoded, character, escaped, index_value) {
+            if (length(raw) < 2 || substr(raw, 1, 1) != "\"" || substr(raw, length(raw), 1) != "\"") {
                 invalid=1
-                return
+                return ""
             }
-            print path, source, runtime, kind, identifier, sha256
+            raw=substr(raw, 2, length(raw) - 2)
+            decoded=""
+            for (index_value=1; index_value <= length(raw); index_value++) {
+                character=substr(raw, index_value, 1)
+                if (character == "\\") {
+                    index_value++
+                    if (index_value > length(raw)) {
+                        invalid=1
+                        return ""
+                    }
+                    escaped=substr(raw, index_value, 1)
+                    if (escaped != "\\" && escaped != "\"") {
+                        invalid=1
+                        return ""
+                    }
+                    decoded=decoded escaped
+                } else if (character == "\"" || character == "\t") {
+                    invalid=1
+                    return ""
+                } else {
+                    decoded=decoded character
+                }
+            }
+            return decoded
         }
-        /^  - path:[[:space:]]*/ {
-            flush_record()
-            path=scalar($0)
-            source=runtime=kind=identifier=sha256=""
-            record_started=1
+        function field_value(line, prefix) {
+            if (index(line, prefix) != 1) {
+                invalid=1
+                return ""
+            }
+            return decode_quoted(substr(line, length(prefix) + 1))
+        }
+
+        NR == 1 {
+            if ($0 == "version: 1") {
+                state="assets"
+            } else if ($0 ~ /^version:[[:space:]]*/) {
+                unsupported=1
+            } else {
+                invalid=1
+            }
             next
         }
-        record_started && /^    source:[[:space:]]*/ { source=scalar($0); next }
-        record_started && /^    runtime:[[:space:]]*/ { runtime=scalar($0); next }
-        record_started && /^    kind:[[:space:]]*/ { kind=scalar($0); next }
-        record_started && /^    identifier:[[:space:]]*/ { identifier=scalar($0); next }
-        record_started && /^    sha256:[[:space:]]*/ { sha256=scalar($0); next }
+        state == "assets" {
+            if ($0 == "assets: []") {
+                state="done"
+            } else if ($0 == "assets:") {
+                state="path"
+            } else {
+                invalid=1
+            }
+            next
+        }
+        state == "path" {
+            path=field_value($0, "  - path: ")
+            source=runtime=kind=identifier=sha256=""
+            record_count++
+            state="source"
+            next
+        }
+        state == "source" {
+            source=field_value($0, "    source: ")
+            state="runtime"
+            next
+        }
+        state == "runtime" {
+            runtime=field_value($0, "    runtime: ")
+            state="kind"
+            next
+        }
+        state == "kind" {
+            kind=field_value($0, "    kind: ")
+            state="identifier"
+            next
+        }
+        state == "identifier" {
+            identifier=field_value($0, "    identifier: ")
+            state="sha256"
+            next
+        }
+        state == "sha256" {
+            sha256=field_value($0, "    sha256: ")
+            if (path == "" || source == "" || runtime == "" || kind == "" || identifier == "" ||
+                length(sha256) != 64 || sha256 ~ /[^0-9a-f]/) {
+                invalid=1
+            } else {
+                print path, source, runtime, kind, identifier, sha256
+            }
+            state="path"
+            next
+        }
+        { invalid=1 }
+
         END {
-            flush_record()
+            if (NR < 2 || state == "version" || state == "assets" || state == "source" ||
+                state == "runtime" || state == "kind" || state == "identifier" || state == "sha256" ||
+                (state == "path" && record_count == 0)) {
+                invalid=1
+            }
+            if (unsupported) exit 2
             if (invalid) exit 1
         }
     ' "$manifest_path" > "$records_path"
 }
 
 cleanup_generated_manifest() {
+    local cleanup_status=0
+
+    if [[ -n "$GENERATED_ACTIVE_TEMP" ]]; then
+        discard_temp_file "$GENERATED_ACTIVE_TEMP" || cleanup_status=1
+    fi
     if [[ -n "$GENERATED_MANIFEST_WORKDIR" && -d "$GENERATED_MANIFEST_WORKDIR" ]]; then
         rm -f \
             "$GENERATED_MANIFEST_WORKDIR/index.tsv" \
             "$GENERATED_MANIFEST_WORKDIR/records.tsv" \
             "$GENERATED_MANIFEST_WORKDIR/records.updated.tsv" \
-            "$GENERATED_MANIFEST_WORKDIR/records.sorted.tsv"
-        rmdir "$GENERATED_MANIFEST_WORKDIR" 2>/dev/null || true
+            "$GENERATED_MANIFEST_WORKDIR/records.sorted.tsv" \
+            "$GENERATED_MANIFEST_WORKDIR/cursor.mdc" || cleanup_status=1
+        rmdir "$GENERATED_MANIFEST_WORKDIR" 2>/dev/null || cleanup_status=1
     fi
     GENERATED_MANIFEST_PATH=""
     GENERATED_MANIFEST_INDEX=""
     GENERATED_MANIFEST_RECORDS=""
     GENERATED_MANIFEST_WORKDIR=""
     GENERATED_MANIFEST_FAILED=false
+    GENERATED_ACTIVE_TEMP=""
+    restore_generated_signal_traps
+    return "$cleanup_status"
 }
 
 begin_generated_manifest() {
@@ -87,15 +260,38 @@ begin_generated_manifest() {
 
     cleanup_generated_manifest
     GENERATED_MANIFEST_PATH="$manifest_path"
-    GENERATED_MANIFEST_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-generated.XXXXXX")"
+    if [[ -L "$manifest_path" || (-e "$manifest_path" && ! -f "$manifest_path") ]]; then
+        printf 'Generated asset manifest is not a regular file: %s\n' "$manifest_path" >&2
+        GENERATED_MANIFEST_PATH=""
+        return 1
+    fi
+    if ! GENERATED_MANIFEST_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-generated.XXXXXX")"; then
+        printf 'Cannot create generated asset work directory\n' >&2
+        GENERATED_MANIFEST_PATH=""
+        return 1
+    fi
+    install_generated_signal_traps
     GENERATED_MANIFEST_INDEX="$GENERATED_MANIFEST_WORKDIR/index.tsv"
     GENERATED_MANIFEST_RECORDS="$GENERATED_MANIFEST_WORKDIR/records.tsv"
-    : > "$GENERATED_MANIFEST_INDEX"
-    : > "$GENERATED_MANIFEST_RECORDS"
+    if ! : > "$GENERATED_MANIFEST_INDEX"; then
+        cleanup_generated_manifest
+        return 1
+    fi
+    if ! : > "$GENERATED_MANIFEST_RECORDS"; then
+        cleanup_generated_manifest
+        return 1
+    fi
 
     if [[ -f "$manifest_path" ]]; then
-        if ! load_generated_manifest_records "$manifest_path" "$GENERATED_MANIFEST_INDEX"; then
-            printf 'Malformed generated asset manifest: %s\n' "$manifest_path" >&2
+        if load_generated_manifest_records "$manifest_path" "$GENERATED_MANIFEST_INDEX"; then
+            :
+        else
+            local load_status=$?
+            if [[ "$load_status" -eq 2 ]]; then
+                printf 'Unsupported generated asset manifest version: %s\n' "$manifest_path" >&2
+            else
+                printf 'Malformed generated asset manifest: %s\n' "$manifest_path" >&2
+            fi
             cleanup_generated_manifest
             return 1
         fi
@@ -108,10 +304,17 @@ begin_generated_manifest() {
 
     while IFS=$'\t' read -r record_path record_source record_runtime record_kind record_identifier record_hash; do
         [[ -n "$record_path" ]] || continue
-        if [[ -f "$record_path" ]]; then
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        if generated_path_exists "$record_path" && [[ ! -f "$record_path" || -L "$record_path" ]]; then
+            printf 'Generated asset collision: %s is not a regular Cyberpunk-owned file\n' "$record_path" >&2
+            cleanup_generated_manifest
+            return 1
+        elif [[ -f "$record_path" ]]; then
+            if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "$record_path" "$record_source" "$record_runtime" "$record_kind" "$record_identifier" "$record_hash" \
-                >> "$GENERATED_MANIFEST_RECORDS"
+                >> "$GENERATED_MANIFEST_RECORDS"; then
+                cleanup_generated_manifest
+                return 1
+            fi
         fi
     done < "$GENERATED_MANIFEST_INDEX"
 }
@@ -123,11 +326,25 @@ record_generated_asset() {
     local kind="$4"
     local identifier="$5"
     local hash="$6"
-    local updated="$GENERATED_MANIFEST_WORKDIR/records.updated.tsv"
+    local updated
 
-    awk -F '\t' -v path="$path" '$1 != path' "$GENERATED_MANIFEST_RECORDS" > "$updated"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$path" "$source" "$runtime" "$kind" "$identifier" "$hash" >> "$updated"
-    mv "$updated" "$GENERATED_MANIFEST_RECORDS"
+    if ! updated="$(mktemp "$GENERATED_MANIFEST_WORKDIR/records.updated.XXXXXX")"; then
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP="$updated"
+    if ! awk -F '\t' -v path="$path" '$1 != path' "$GENERATED_MANIFEST_RECORDS" > "$updated"; then
+        discard_temp_file "$updated" || true
+        return 1
+    fi
+    if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$path" "$source" "$runtime" "$kind" "$identifier" "$hash" >> "$updated"; then
+        discard_temp_file "$updated" || true
+        return 1
+    fi
+    if ! mv "$updated" "$GENERATED_MANIFEST_RECORDS"; then
+        discard_temp_file "$updated" || true
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP=""
 }
 
 replace_generated_file() {
@@ -141,10 +358,27 @@ replace_generated_file() {
     fi
 
     destination_dir="$(dirname "$destination")"
-    mkdir -p "$destination_dir"
-    temporary="$destination_dir/.$(basename "$destination").tmp.$$"
-    cp "$content_file" "$temporary"
-    mv "$temporary" "$destination"
+    if ! create_parent_directory "$destination"; then
+        return 1
+    fi
+    if ! temporary="$(create_sibling_temp "$destination")"; then
+        printf 'Cannot create generated asset temporary file in: %s\n' "$destination_dir" >&2
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP="$temporary"
+    if ! cp "$content_file" "$temporary"; then
+        discard_temp_file "$temporary" || true
+        return 1
+    fi
+    if ! mv "$temporary" "$destination"; then
+        discard_temp_file "$temporary" || true
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP=""
+}
+
+generated_path_exists() {
+    [[ -e "$1" || -L "$1" ]]
 }
 
 write_generated_asset() {
@@ -186,9 +420,12 @@ $prior_record
 EOF
     fi
 
-    if [[ ! -f "$destination" ]]; then
-        replace_generated_file "$destination" "$content_file"
-    elif [[ -z "$prior_path" ]]; then
+    if ! generated_path_exists "$destination"; then
+        if ! replace_generated_file "$destination" "$content_file"; then
+            GENERATED_MANIFEST_FAILED=true
+            return 1
+        fi
+    elif [[ -z "$prior_path" || ! -f "$destination" || -L "$destination" ]]; then
         printf 'Generated asset collision: %s is not owned by Cyberpunk\n' "$relative_path" >&2
         GENERATED_MANIFEST_FAILED=true
         return 1
@@ -203,27 +440,61 @@ EOF
             return 1
         fi
         if [[ "$actual_hash" != "$desired_hash" ]]; then
-            replace_generated_file "$destination" "$content_file"
+            if ! replace_generated_file "$destination" "$content_file"; then
+                GENERATED_MANIFEST_FAILED=true
+                return 1
+            fi
         fi
     fi
 
-    record_generated_asset "$relative_path" "$source" "$runtime" "$kind" "$identifier" "$desired_hash"
+    if ! record_generated_asset "$relative_path" "$source" "$runtime" "$kind" "$identifier" "$desired_hash"; then
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
 }
 
 yaml_double_quote() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-finish_generated_manifest() {
-    local sorted_records
-    local manifest_dir
-    local temporary
+render_generated_manifest() {
+    local sorted_records="$1"
+    local temporary="$2"
     local path
     local source
     local runtime
     local kind
     local identifier
     local hash
+
+    if ! printf 'version: 1\n' > "$temporary"; then
+        return 1
+    fi
+    if [[ ! -s "$sorted_records" ]]; then
+        if ! printf 'assets: []\n' >> "$temporary"; then
+            return 1
+        fi
+        return 0
+    fi
+    if ! printf 'assets:\n' >> "$temporary"; then
+        return 1
+    fi
+    while IFS=$'\t' read -r path source runtime kind identifier hash; do
+        if ! printf '  - path: "%s"\n' "$(yaml_double_quote "$path")" >> "$temporary" ||
+            ! printf '    source: "%s"\n' "$(yaml_double_quote "$source")" >> "$temporary" ||
+            ! printf '    runtime: "%s"\n' "$(yaml_double_quote "$runtime")" >> "$temporary" ||
+            ! printf '    kind: "%s"\n' "$(yaml_double_quote "$kind")" >> "$temporary" ||
+            ! printf '    identifier: "%s"\n' "$(yaml_double_quote "$identifier")" >> "$temporary" ||
+            ! printf '    sha256: "%s"\n' "$hash" >> "$temporary"; then
+            return 1
+        fi
+    done < "$sorted_records"
+}
+
+finish_generated_manifest() {
+    local sorted_records
+    local manifest_dir
+    local temporary
 
     if [[ "$GENERATED_MANIFEST_FAILED" == true ]]; then
         cleanup_generated_manifest
@@ -235,30 +506,29 @@ finish_generated_manifest() {
     fi
 
     sorted_records="$GENERATED_MANIFEST_WORKDIR/records.sorted.tsv"
-    LC_ALL=C sort -t $'\t' -k1,1 "$GENERATED_MANIFEST_RECORDS" > "$sorted_records"
-    manifest_dir="$(dirname "$GENERATED_MANIFEST_PATH")"
-    mkdir -p "$manifest_dir"
-    temporary="$manifest_dir/.$(basename "$GENERATED_MANIFEST_PATH").tmp.$$"
-
-    printf 'version: 1\n' > "$temporary"
-    if [[ ! -s "$sorted_records" ]]; then
-        printf 'assets: []\n' >> "$temporary"
-    else
-        printf 'assets:\n' >> "$temporary"
-        while IFS=$'\t' read -r path source runtime kind identifier hash; do
-            printf '  - path: "%s"\n' "$(yaml_double_quote "$path")" >> "$temporary"
-            printf '    source: "%s"\n' "$(yaml_double_quote "$source")" >> "$temporary"
-            printf '    runtime: "%s"\n' "$(yaml_double_quote "$runtime")" >> "$temporary"
-            printf '    kind: "%s"\n' "$(yaml_double_quote "$kind")" >> "$temporary"
-            printf '    identifier: "%s"\n' "$(yaml_double_quote "$identifier")" >> "$temporary"
-            printf '    sha256: "%s"\n' "$hash" >> "$temporary"
-        done < "$sorted_records"
+    if ! LC_ALL=C sort -t $'\t' -k1,1 "$GENERATED_MANIFEST_RECORDS" > "$sorted_records"; then
+        cleanup_generated_manifest
+        return 1
     fi
-
-    if [[ -f "$GENERATED_MANIFEST_PATH" ]] && cmp -s "$temporary" "$GENERATED_MANIFEST_PATH"; then
-        rm -f "$temporary"
-    else
-        mv "$temporary" "$GENERATED_MANIFEST_PATH"
+    manifest_dir="$(dirname "$GENERATED_MANIFEST_PATH")"
+    if ! create_parent_directory "$GENERATED_MANIFEST_PATH"; then
+        cleanup_generated_manifest
+        return 1
+    fi
+    if ! temporary="$(create_sibling_temp "$GENERATED_MANIFEST_PATH")"; then
+        printf 'Cannot create generated manifest temporary file in: %s\n' "$manifest_dir" >&2
+        cleanup_generated_manifest
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP="$temporary"
+    if ! render_generated_manifest "$sorted_records" "$temporary"; then
+        discard_temp_file "$temporary" || true
+        cleanup_generated_manifest
+        return 1
+    fi
+    if ! commit_temp_file "$temporary" "$GENERATED_MANIFEST_PATH"; then
+        cleanup_generated_manifest
+        return 1
     fi
     cleanup_generated_manifest
 }
@@ -276,6 +546,11 @@ update_managed_block() {
     local temporary
     local last_byte
 
+    if [[ ! -f "$body_file" || -L "$body_file" ]]; then
+        printf 'Managed block body is not a regular file: %s\n' "$body_file" >&2
+        return 1
+    fi
+
     if [[ -f "$path" ]]; then
         start_count="$(grep -Fxc "$start_marker" "$path" || true)"
         end_count="$(grep -Fxc "$end_marker" "$path" || true)"
@@ -286,21 +561,45 @@ update_managed_block() {
             return 0
         fi
         path_dir="$(dirname "$path")"
-        mkdir -p "$path_dir"
-        temporary="$path_dir/.$(basename "$path").tmp.$$"
+        if ! create_parent_directory "$path"; then
+            return 1
+        fi
+        if ! temporary="$(create_sibling_temp "$path")"; then
+            printf 'Cannot create managed block temporary file in: %s\n' "$path_dir" >&2
+            return 1
+        fi
+        GENERATED_ACTIVE_TEMP="$temporary"
         if [[ -f "$path" ]]; then
-            cp "$path" "$temporary"
+            if ! cp "$path" "$temporary"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
             if [[ -s "$path" ]]; then
-                last_byte="$(tail -c 1 "$path")"
+                if ! last_byte="$(tail -c 1 "$path")"; then
+                    discard_temp_file "$temporary" || true
+                    return 1
+                fi
                 if [[ -n "$last_byte" ]]; then
-                    printf '\n\n' >> "$temporary"
+                    if ! printf '\n\n' >> "$temporary"; then
+                        discard_temp_file "$temporary" || true
+                        return 1
+                    fi
                 else
-                    printf '\n' >> "$temporary"
+                    if ! printf '\n' >> "$temporary"; then
+                        discard_temp_file "$temporary" || true
+                        return 1
+                    fi
                 fi
             fi
-            cat "$body_file" >> "$temporary"
+            if ! cat "$body_file" >> "$temporary"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
         else
-            cp "$body_file" "$temporary"
+            if ! cp "$body_file" "$temporary"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
         fi
     elif [[ "$start_count" -eq 1 && "$end_count" -eq 1 ]]; then
         start_line="$(grep -Fn "$start_marker" "$path" | cut -d: -f1)"
@@ -313,22 +612,35 @@ update_managed_block() {
             return 0
         fi
         path_dir="$(dirname "$path")"
-        temporary="$path_dir/.$(basename "$path").tmp.$$"
-        : > "$temporary"
-        if [[ "$start_line" -gt 1 ]]; then
-            head -n "$((start_line - 1))" "$path" >> "$temporary"
+        if ! create_parent_directory "$path"; then
+            return 1
         fi
-        cat "$body_file" >> "$temporary"
-        tail -n "+$((end_line + 1))" "$path" >> "$temporary"
+        if ! temporary="$(create_sibling_temp "$path")"; then
+            printf 'Cannot create managed block temporary file in: %s\n' "$path_dir" >&2
+            return 1
+        fi
+        GENERATED_ACTIVE_TEMP="$temporary"
+        if [[ "$start_line" -gt 1 ]]; then
+            if ! head -n "$((start_line - 1))" "$path" >> "$temporary"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
+        fi
+        if ! cat "$body_file" >> "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
+        if ! tail -n "+$((end_line + 1))" "$path" >> "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
     else
         printf 'Malformed managed markers in %s\n' "$path" >&2
         return 1
     fi
 
-    if [[ -f "$path" ]] && cmp -s "$temporary" "$path"; then
-        rm -f "$temporary"
-    else
-        mv "$temporary" "$path"
+    if ! commit_temp_file "$temporary" "$path"; then
+        return 1
     fi
 }
 
@@ -347,12 +659,25 @@ ensure_codex_agent_settings() {
             return 0
         fi
         path_dir="$(dirname "$path")"
-        mkdir -p "$path_dir"
-        printf '%s\n' '[agents]' 'max_concurrent_threads_per_session = 3' > "$path"
+        if ! create_parent_directory "$path"; then
+            return 1
+        fi
+        if ! temporary="$(create_sibling_temp "$path")"; then
+            printf 'Cannot create Codex settings temporary file in: %s\n' "$path_dir" >&2
+            return 1
+        fi
+        GENERATED_ACTIVE_TEMP="$temporary"
+        if ! printf '%s\n' '[agents]' 'max_concurrent_threads_per_session = 3' > "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
+        if ! commit_temp_file "$temporary" "$path"; then
+            return 1
+        fi
         return 0
     fi
 
-    agents_count="$(grep -Ec '^[[:space:]]*\[agents\][[:space:]]*$' "$path" || true)"
+    agents_count="$(grep -Ec '^[[:space:]]*\[agents\][[:space:]]*(#.*)?$' "$path" || true)"
     if [[ "$agents_count" -gt 1 ]]; then
         printf 'Malformed Codex settings: duplicate [agents] tables in %s\n' "$path" >&2
         return 1
@@ -362,25 +687,46 @@ ensure_codex_agent_settings() {
             return 0
         fi
         path_dir="$(dirname "$path")"
-        temporary="$path_dir/.$(basename "$path").tmp.$$"
-        cp "$path" "$temporary"
+        if ! temporary="$(create_sibling_temp "$path")"; then
+            printf 'Cannot create Codex settings temporary file in: %s\n' "$path_dir" >&2
+            return 1
+        fi
+        GENERATED_ACTIVE_TEMP="$temporary"
+        if ! cp "$path" "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
         if [[ -s "$path" ]]; then
-            last_byte="$(tail -c 1 "$path")"
+            if ! last_byte="$(tail -c 1 "$path")"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
             if [[ -n "$last_byte" ]]; then
-                printf '\n\n' >> "$temporary"
+                if ! printf '\n\n' >> "$temporary"; then
+                    discard_temp_file "$temporary" || true
+                    return 1
+                fi
             else
-                printf '\n' >> "$temporary"
+                if ! printf '\n' >> "$temporary"; then
+                    discard_temp_file "$temporary" || true
+                    return 1
+                fi
             fi
         fi
-        printf '%s\n' '[agents]' 'max_concurrent_threads_per_session = 3' >> "$temporary"
-        mv "$temporary" "$path"
+        if ! printf '%s\n' '[agents]' 'max_concurrent_threads_per_session = 3' >> "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
+        if ! commit_temp_file "$temporary" "$path"; then
+            return 1
+        fi
         return 0
     fi
 
-    agents_line="$(grep -En '^[[:space:]]*\[agents\][[:space:]]*$' "$path" | head -n 1 | cut -d: -f1)"
+    agents_line="$(grep -En '^[[:space:]]*\[agents\][[:space:]]*(#.*)?$' "$path" | head -n 1 | cut -d: -f1)"
     key_line="$(awk -v start="$agents_line" '
         NR <= start { next }
-        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { exit }
+        /^[[:space:]]*(\[[^]]+\]|\[\[[^]]+\]\])[[:space:]]*(#.*)?$/ { exit }
         /^[[:space:]]*max_concurrent_threads_per_session[[:space:]]*=/ { print NR; exit }
     ' "$path")"
     if [[ -n "$key_line" ]]; then
@@ -390,22 +736,43 @@ ensure_codex_agent_settings() {
         return 0
     fi
 
-    next_table_line="$(awk -v start="$agents_line" 'NR > start && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { print NR; exit }' "$path")"
+    next_table_line="$(awk -v start="$agents_line" 'NR > start && /^[[:space:]]*(\[[^]]+\]|\[\[[^]]+\]\])[[:space:]]*(#.*)?$/ { print NR; exit }' "$path")"
     path_dir="$(dirname "$path")"
-    temporary="$path_dir/.$(basename "$path").tmp.$$"
-    if [[ -n "$next_table_line" ]]; then
-        head -n "$((next_table_line - 1))" "$path" > "$temporary"
-        printf '%s\n' 'max_concurrent_threads_per_session = 3' >> "$temporary"
-        tail -n "+$next_table_line" "$path" >> "$temporary"
-    else
-        cp "$path" "$temporary"
-        if [[ -s "$path" ]]; then
-            last_byte="$(tail -c 1 "$path")"
-            [[ -z "$last_byte" ]] || printf '\n' >> "$temporary"
-        fi
-        printf '%s\n' 'max_concurrent_threads_per_session = 3' >> "$temporary"
+    if ! temporary="$(create_sibling_temp "$path")"; then
+        printf 'Cannot create Codex settings temporary file in: %s\n' "$path_dir" >&2
+        return 1
     fi
-    mv "$temporary" "$path"
+    GENERATED_ACTIVE_TEMP="$temporary"
+    if [[ -n "$next_table_line" ]]; then
+        if ! head -n "$((next_table_line - 1))" "$path" > "$temporary" ||
+            ! printf '%s\n' 'max_concurrent_threads_per_session = 3' >> "$temporary" ||
+            ! tail -n "+$next_table_line" "$path" >> "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
+    else
+        if ! cp "$path" "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
+        if [[ -s "$path" ]]; then
+            if ! last_byte="$(tail -c 1 "$path")"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
+            if [[ -n "$last_byte" ]] && ! printf '\n' >> "$temporary"; then
+                discard_temp_file "$temporary" || true
+                return 1
+            fi
+        fi
+        if ! printf '%s\n' 'max_concurrent_threads_per_session = 3' >> "$temporary"; then
+            discard_temp_file "$temporary" || true
+            return 1
+        fi
+    fi
+    if ! commit_temp_file "$temporary" "$path"; then
+        return 1
+    fi
 }
 
 validate_generated_manifest() {
@@ -421,27 +788,49 @@ validate_generated_manifest() {
     local expected_hash
     local actual_hash
     local failures=0
+    local load_status
+    local cleanup_status=0
 
-    [[ -f "$manifest_path" ]] || {
+    [[ -f "$manifest_path" && ! -L "$manifest_path" ]] || {
         printf 'Generated asset manifest not found: %s\n' "$manifest_path" >&2
         return 1
     }
-    validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-validate-generated.XXXXXX")"
+    if ! validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-validate-generated.XXXXXX")"; then
+        printf 'Cannot create generated manifest validation directory\n' >&2
+        return 1
+    fi
     records="$validation_dir/records.tsv"
-    if ! load_generated_manifest_records "$manifest_path" "$records"; then
-        printf 'Malformed generated asset manifest: %s\n' "$manifest_path" >&2
-        rm -f "$records"
+    if load_generated_manifest_records "$manifest_path" "$records"; then
+        :
+    else
+        load_status=$?
+        if [[ "$load_status" -eq 2 ]]; then
+            printf 'Unsupported generated asset manifest version: %s\n' "$manifest_path" >&2
+        else
+            printf 'Malformed generated asset manifest: %s\n' "$manifest_path" >&2
+        fi
+        rm -f "$records" || true
         rmdir "$validation_dir" 2>/dev/null || true
         return 1
     fi
-    project_root="$(cd "$(dirname "$manifest_path")/.." && pwd)"
+    if ! awk -F '\t' '!/^[[:space:]]*$/ && seen[$1]++ { exit 1 }' "$records"; then
+        printf 'Duplicate generated asset path in manifest: %s\n' "$manifest_path" >&2
+        rm -f "$records" || true
+        rmdir "$validation_dir" 2>/dev/null || true
+        return 1
+    fi
+    if ! project_root="$(cd "$(dirname "$manifest_path")/.." && pwd)"; then
+        rm -f "$records" || true
+        rmdir "$validation_dir" 2>/dev/null || true
+        return 1
+    fi
 
     while IFS=$'\t' read -r path source runtime kind identifier expected_hash; do
         [[ -n "$path" ]] || continue
         if [[ ! "$expected_hash" =~ ^[0-9a-f]{64}$ ]]; then
             printf 'Invalid generated asset SHA-256: %s\n' "$path" >&2
             failures=$((failures + 1))
-        elif [[ ! -f "$project_root/$path" ]]; then
+        elif [[ ! -f "$project_root/$path" || -L "$project_root/$path" ]]; then
             printf 'Missing generated asset: %s\n' "$path" >&2
             failures=$((failures + 1))
         else
@@ -452,7 +841,11 @@ validate_generated_manifest() {
             fi
         fi
     done < "$records"
-    rm -f "$records"
-    rmdir "$validation_dir" 2>/dev/null || true
+    rm -f "$records" || cleanup_status=1
+    rmdir "$validation_dir" 2>/dev/null || cleanup_status=1
+    if [[ "$cleanup_status" -ne 0 ]]; then
+        printf 'Cannot clean generated manifest validation directory: %s\n' "$validation_dir" >&2
+        return 1
+    fi
     [[ "$failures" -eq 0 ]]
 }
