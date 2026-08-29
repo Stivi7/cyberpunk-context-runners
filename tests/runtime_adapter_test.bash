@@ -33,7 +33,7 @@ make_post_commit_signal_wrapper() {
 set -euo pipefail
 for argument in "$@"; do
     case "$argument" in
-        */backup.*)
+        */.*.rollback.*/original)
             kill -TERM "$PPID"
             break
             ;;
@@ -72,7 +72,7 @@ make_restore_failure_wrapper() {
     local wrapper_dir="$1"
 
     mkdir -p "$wrapper_dir"
-    cat > "$wrapper_dir/cp" <<'EOF'
+    cat > "$wrapper_dir/ln" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source_path=""
@@ -83,11 +83,88 @@ for argument in "$@"; do
     esac
 done
 case "$source_path" in
-    */backup.*) exit 73 ;;
+    */.*.rollback.*/original) exit 73 ;;
 esac
-exec /bin/cp "$@"
+exec /bin/ln "$@"
 EOF
-    chmod +x "$wrapper_dir/cp"
+    chmod +x "$wrapper_dir/ln"
+}
+
+make_post_check_absent_wrapper() {
+    local wrapper_dir="$1"
+
+    mkdir -p "$wrapper_dir"
+    cat > "$wrapper_dir/mktemp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+temporary="$(/usr/bin/mktemp "$@")"
+printf '%s\n' "$temporary"
+target_name="$(basename "$CYBERPUNK_POSTCHECK_TARGET")"
+case "$(basename "$temporary")" in
+    ".$target_name.tmp."*)
+        temporary_dir="$(cd "$(dirname "$temporary")" && pwd -P)"
+        target_dir="$(cd "$(dirname "$CYBERPUNK_POSTCHECK_TARGET")" && pwd -P)"
+        if [[ "$temporary_dir" == "$target_dir" ]]; then
+            printf '%s\n' 'post-check-user-collision' > "$CYBERPUNK_POSTCHECK_TARGET"
+        fi
+        ;;
+esac
+EOF
+    chmod +x "$wrapper_dir/mktemp"
+}
+
+make_post_check_present_wrapper() {
+    local wrapper_dir="$1"
+
+    mkdir -p "$wrapper_dir"
+    cat > "$wrapper_dir/cp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=""
+for argument in "$@"; do
+    case "$argument" in
+        -*) continue ;;
+        *) source_path="$argument"; break ;;
+    esac
+done
+/bin/cp "$@"
+absolute_source="$(cd "$(dirname "$source_path")" && pwd -P)/$(basename "$source_path")"
+absolute_target="$(cd "$(dirname "$CYBERPUNK_POSTCHECK_TARGET")" && pwd -P)/$(basename "$CYBERPUNK_POSTCHECK_TARGET")"
+if [[ "$absolute_source" == "$absolute_target" ]]; then
+    printf '%s\n' 'post-check-user-drift' >> "$CYBERPUNK_POSTCHECK_TARGET"
+fi
+EOF
+    cat > "$wrapper_dir/mv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=""
+for argument in "$@"; do
+    case "$argument" in
+        -*) continue ;;
+        *) source_path="$argument"; break ;;
+    esac
+done
+absolute_source="$(cd "$(dirname "$source_path")" && pwd -P)/$(basename "$source_path")"
+absolute_target="$(cd "$(dirname "$CYBERPUNK_POSTCHECK_TARGET")" && pwd -P)/$(basename "$CYBERPUNK_POSTCHECK_TARGET")"
+if [[ "$absolute_source" == "$absolute_target" ]]; then
+    printf '%s\n' 'post-check-user-drift' >> "$CYBERPUNK_POSTCHECK_TARGET"
+fi
+exec /bin/mv "$@"
+EOF
+    chmod +x "$wrapper_dir/cp" "$wrapper_dir/mv"
+}
+
+run_cli_with_target_hook() {
+    local project="$1"
+    local path_prefix="$2"
+    local target="$3"
+    shift 3
+    (
+        cd "$project"
+        CYBERPUNK_POSTCHECK_TARGET="$target" \
+        PATH="$path_prefix:$PATH" \
+            "$CYBERPUNK_BIN" "$@"
+    )
 }
 
 run_cli_with_race() {
@@ -518,6 +595,43 @@ assert_contains "$COMMAND_OUTPUT" "drift after staging" "owned-path race was not
 assert_contains "$(<"$drift_race_target")" 'concurrent-user-drift' "forced sync overwrote concurrent drift"
 assert_eq "$drift_race_manifest_before" "$(cksum "$drift_race_project/.cyberpunk/generated.yml")" "owned-path race changed the manifest"
 assert_eq "$drift_race_fixer_before" "$(cksum "$drift_race_project/.codex/agents/fixer.toml")" "owned-path race did not roll back an earlier install"
+
+test_start "a present destination changed after revalidation is atomically preserved"
+postcheck_present_project="$SANDBOX_ROOT/postcheck-present"
+mkdir -p "$postcheck_present_project"
+assert_exit 0 run_cli "$postcheck_present_project" init --runtime codex
+postcheck_present_manifest_before="$(cksum "$postcheck_present_project/.cyberpunk/generated.yml")"
+postcheck_present_fixer_before="$(cksum "$postcheck_present_project/.codex/agents/fixer.toml")"
+replace_exact_line "$postcheck_present_project/.cyberpunk/config.yml" '      codex: "gpt-5.6-sol"' '      codex: "postcheck-model"'
+postcheck_present_wrapper="$SANDBOX_ROOT/postcheck-present-bin"
+make_post_check_present_wrapper "$postcheck_present_wrapper"
+postcheck_present_target="$postcheck_present_project/.codex/agents/mind.toml"
+capture run_cli_with_target_hook \
+    "$postcheck_present_project" \
+    "$postcheck_present_wrapper" \
+    "$postcheck_present_target" \
+    sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "changed during atomic claim" "post-check present drift was not detected"
+assert_contains "$(<"$postcheck_present_target")" 'post-check-user-drift' "post-check present drift was overwritten"
+assert_eq "$postcheck_present_manifest_before" "$(cksum "$postcheck_present_project/.cyberpunk/generated.yml")" "post-check present drift changed the manifest"
+assert_eq "$postcheck_present_fixer_before" "$(cksum "$postcheck_present_project/.codex/agents/fixer.toml")" "post-check present drift did not roll back an earlier install"
+
+test_start "an absent destination appearing after revalidation is not clobbered"
+postcheck_absent_project="$SANDBOX_ROOT/postcheck-absent"
+mkdir -p "$postcheck_absent_project"
+postcheck_absent_wrapper="$SANDBOX_ROOT/postcheck-absent-bin"
+make_post_check_absent_wrapper "$postcheck_absent_wrapper"
+postcheck_absent_target="$postcheck_absent_project/.codex/agents/coder.toml"
+capture run_cli_with_target_hook \
+    "$postcheck_absent_project" \
+    "$postcheck_absent_wrapper" \
+    "$postcheck_absent_target" \
+    init --runtime codex
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "no-clobber install" "post-check absent collision was not detected"
+assert_eq 'post-check-user-collision' "$(<"$postcheck_absent_target")" "post-check absent collision was overwritten"
+[[ ! -e "$postcheck_absent_project/.cyberpunk/generated.yml" ]] || fail "post-check absent collision committed a manifest"
 
 test_start "an incomplete rollback preserves exact backup bytes for manual recovery"
 recovery_project="$SANDBOX_ROOT/recovery"
