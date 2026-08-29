@@ -23,6 +23,57 @@ line_count() {
     grep -Fxc "$value" "$path" || true
 }
 
+write_legacy_config() {
+    local destination="$1"
+    cat > "$destination" <<'EOF'
+version: 1
+
+delivery:
+  default: integration-branch
+  allow_push: false
+  allow_pull_requests: false
+  allow_deploy: false
+
+workflow:
+  mode: adaptive
+  levels: [quick, standard, complex]
+  repair_cycles_before_rediagnosis: 2
+  unresolved_cycles_before_escalation: 3
+
+git:
+  integration_branch: auto
+  branch_prefix: cyberpunk/
+  worktree_root: .worktrees
+  require_worktrees: true
+  require_non_overlapping_ownership: true
+  allow_internal_commits: true
+  merge_worker_branches: true
+  allow_protected_branch_merge: false
+  cleanup_worktrees_after_integration: true
+  cleanup_worker_branches: after-confirmation
+
+memory:
+  tracked: [.cyberpunk/project.md, .cyberpunk/memory]
+  local: .cyberpunk/runs
+  promote_only_validated_lessons: true
+
+skills:
+  core_path: skills/core
+  project_path: skills/project
+  enabled_project: []
+EOF
+}
+
+section_text() {
+    local config="$1"
+    local section="$2"
+    awk -v section="$section" '
+        $0 == section ":" { printing=1 }
+        printing && /^[^[:space:]][^:]*:$/ && $0 != section ":" { exit }
+        printing { print }
+    ' "$config"
+}
+
 test_start "fresh project initializes and validates"
 assert_exit 0 run_cli "$project" init
 assert_exit 0 run_cli "$project" validate
@@ -31,6 +82,27 @@ assert_file "$project/CLAUDE.md"
 assert_file "$project/.cursor/rules/rules.mdc"
 assert_file "$project/agents/fixer.md"
 assert_file "$project/skills/core/requirements-discovery/SKILL.md"
+
+test_start "sync migrates a legacy configuration without changing existing policy"
+legacy_project="$SANDBOX_ROOT/legacy"
+mkdir -p "$legacy_project/.cyberpunk"
+write_legacy_config "$legacy_project/.cyberpunk/config.yml"
+legacy_delivery_before="$(section_text "$legacy_project/.cyberpunk/config.yml" delivery)"
+legacy_git_before="$(section_text "$legacy_project/.cyberpunk/config.yml" git)"
+legacy_skills_before="$(section_text "$legacy_project/.cyberpunk/config.yml" skills)"
+assert_exit 0 run_cli "$legacy_project" sync
+legacy_config="$legacy_project/.cyberpunk/config.yml"
+assert_contains "$(<"$legacy_config")" "version: 2"
+for value in "runtimes:" "execution:" "models:"; do
+    assert_contains "$(<"$legacy_config")" "$value" "legacy migration"
+done
+assert_eq "$legacy_delivery_before" "$(section_text "$legacy_config" delivery)" "delivery policy changed during migration"
+assert_eq "$legacy_git_before" "$(section_text "$legacy_config" git)" "git policy changed during migration"
+assert_eq "$legacy_skills_before" "$(section_text "$legacy_config" skills)" "skills policy changed during migration"
+legacy_checksum_before="$(cksum "$legacy_config")"
+assert_exit 0 run_cli "$legacy_project" sync
+legacy_checksum_after="$(cksum "$legacy_config")"
+assert_eq "$legacy_checksum_before" "$legacy_checksum_after" "sync migration was not stable"
 
 test_start "every agent default skill resolves"
 for agent_file in "$project"/agents/*.md; do

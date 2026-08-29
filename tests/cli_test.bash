@@ -33,6 +33,7 @@ test_start "init copies the complete team and local-state structure"
 project="$SANDBOX_ROOT/project"
 mkdir -p "$project"
 assert_exit 0 run_cli "$project" init
+assert_contains "$(<"$project/.cyberpunk/config.yml")" "enabled: [codex, claude, cursor]"
 assert_file "$project/agents/nexus.md"
 assert_file "$project/agents/fixer.md"
 assert_file "$project/agents/daemon.md"
@@ -44,6 +45,26 @@ assert_dir "$project/.cyberpunk/runs"
 assert_file "$project/.gitignore"
 assert_eq 1 "$(line_count ".cyberpunk/runs/" "$project/.gitignore")" "run ignore count"
 assert_eq 1 "$(line_count ".worktrees/" "$project/.gitignore")" "worktree ignore count"
+
+test_start "init selects one requested runtime"
+codex_project="$SANDBOX_ROOT/codex"
+mkdir -p "$codex_project"
+assert_exit 0 run_cli "$codex_project" init --runtime codex
+assert_contains "$(<"$codex_project/.cyberpunk/config.yml")" "enabled: [codex]"
+
+test_start "init normalizes repeated runtime selections"
+multi_project="$SANDBOX_ROOT/multi"
+mkdir -p "$multi_project"
+assert_exit 0 run_cli "$multi_project" init --runtime cursor --runtime codex --runtime cursor
+assert_contains "$(<"$multi_project/.cyberpunk/config.yml")" "enabled: [codex, cursor]"
+
+test_start "init rejects unknown runtimes before writing project files"
+invalid_project="$SANDBOX_ROOT/invalid"
+mkdir -p "$invalid_project"
+capture run_cli "$invalid_project" init --runtime warp
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Unknown runtime: warp"
+[[ ! -e "$invalid_project/.cyberpunk" ]] || fail "invalid runtime wrote project files"
 
 test_start "ordinary init preserves user modifications"
 echo "user-marker" >> "$project/agents/nexus.md"

@@ -8,6 +8,9 @@ VERSION="0.3.0"
 
 DRY_RUN=false
 FORCE=false
+REQUESTED_RUNTIMES=()
+
+source "$SCRIPT_DIR/lib/config.bash"
 
 REQUIRED_FILES=(
     ".cyberpunk/config.yml"
@@ -54,7 +57,8 @@ show_usage() {
 Cyberpunk CLI v$VERSION
 
 USAGE:
-    cyberpunk init [--dry-run] [--force]
+    cyberpunk init [--runtime codex|claude|cursor|all]... [--dry-run] [--force]
+    cyberpunk sync [--dry-run] [--force]
     cyberpunk validate
     cyberpunk status
     cyberpunk --help
@@ -66,6 +70,7 @@ COMMANDS:
     status      Report project, agent, skill, and local-run state
 
 INIT OPTIONS:
+    --runtime    Select a runtime; may be specified more than once
     --dry-run   Preview operations without writing files
     --force     Refresh framework-owned template files
 EOF
@@ -203,6 +208,9 @@ ensure_ignore_entries() {
 }
 
 init_project() {
+    local existing_config=false
+
+    [[ -f ".cyberpunk/config.yml" ]] && existing_config=true
     validate_templates
 
     if [[ "$DRY_RUN" == true ]]; then
@@ -210,6 +218,19 @@ init_project() {
     fi
 
     copy_template_tree
+    if [[ -f ".cyberpunk/config.yml" ]]; then
+        migrate_config_v1 ".cyberpunk/config.yml"
+        if [[ ${#REQUESTED_RUNTIMES[@]} -gt 0 ]]; then
+            if [[ "$existing_config" == true ]]; then
+                merge_configured_runtimes ".cyberpunk/config.yml" "${REQUESTED_RUNTIMES[@]}"
+            else
+                write_configured_runtimes ".cyberpunk/config.yml" "${REQUESTED_RUNTIMES[@]}"
+            fi
+        else
+            merge_configured_runtimes ".cyberpunk/config.yml"
+        fi
+        sync_project
+    fi
     ensure_local_state
     ensure_ignore_entries
 
@@ -219,6 +240,10 @@ init_project() {
         log_success "Cyberpunk engineering team initialized"
         log_info "Next: ask The Nexus to inspect the project and take a task"
     fi
+}
+
+sync_project() {
+    migrate_config_v1 ".cyberpunk/config.yml"
 }
 
 validate_skill_frontmatter() {
@@ -344,7 +369,17 @@ status_project() {
     echo "Active local runs: $run_count"
 }
 
-parse_init_options() {
+reset_options() {
+    DRY_RUN=false
+    FORCE=false
+    REQUESTED_RUNTIMES=()
+}
+
+parse_command_options() {
+    local command="$1"
+    local allow_runtime="$2"
+    shift 2
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run)
@@ -353,18 +388,40 @@ parse_init_options() {
             --force)
                 FORCE=true
                 ;;
+            --runtime)
+                if [[ "$allow_runtime" != true ]]; then
+                    log_error "$command does not accept --runtime"
+                    show_usage
+                    exit 1
+                fi
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    log_error "--runtime requires a value"
+                    show_usage
+                    exit 1
+                fi
+                REQUESTED_RUNTIMES+=("$2")
+                shift
+                ;;
             -h|--help)
                 show_usage
                 exit 0
                 ;;
             *)
-                log_error "Unknown init option: $1"
+                log_error "Unknown $command option: $1"
                 show_usage
                 exit 1
                 ;;
         esac
         shift
     done
+
+    if [[ "$allow_runtime" == true ]]; then
+        if [[ ${#REQUESTED_RUNTIMES[@]} -gt 0 ]]; then
+            normalize_runtime_selection "${REQUESTED_RUNTIMES[@]}" >/dev/null
+        else
+            normalize_runtime_selection >/dev/null
+        fi
+    fi
 }
 
 require_no_arguments() {
@@ -377,6 +434,8 @@ require_no_arguments() {
 }
 
 main() {
+    reset_options
+
     if [[ $# -eq 0 ]]; then
         show_usage
         exit 1
@@ -385,8 +444,13 @@ main() {
     case "$1" in
         init)
             shift
-            parse_init_options "$@"
+            parse_command_options init true "$@"
             init_project
+            ;;
+        sync)
+            shift
+            parse_command_options sync false "$@"
+            sync_project
             ;;
         validate)
             shift

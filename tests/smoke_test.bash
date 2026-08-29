@@ -7,6 +7,7 @@ source "$TESTS_DIR/test_helper.bash"
 
 test_start "CLI has valid Bash syntax"
 assert_exit 0 bash -n "$CYBERPUNK_BIN"
+assert_exit 0 bash -n "$REPO_ROOT/lib/config.bash"
 
 test_start "CLI reports its version"
 assert_exit 0 "$CYBERPUNK_BIN" --version
