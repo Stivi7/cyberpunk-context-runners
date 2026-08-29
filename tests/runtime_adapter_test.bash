@@ -17,6 +17,96 @@ run_cli() {
     (cd "$project" && "$CYBERPUNK_BIN" "$@")
 }
 
+run_cli_with_path() {
+    local project="$1"
+    local path_prefix="$2"
+    shift 2
+    (cd "$project" && PATH="$path_prefix:$PATH" "$CYBERPUNK_BIN" "$@")
+}
+
+make_post_commit_signal_wrapper() {
+    local wrapper_dir="$1"
+
+    mkdir -p "$wrapper_dir"
+    cat > "$wrapper_dir/rm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for argument in "$@"; do
+    case "$argument" in
+        */backup.*)
+            kill -TERM "$PPID"
+            break
+            ;;
+    esac
+done
+exec /bin/rm "$@"
+EOF
+    chmod +x "$wrapper_dir/rm"
+}
+
+make_staging_race_wrapper() {
+    local wrapper_dir="$1"
+
+    mkdir -p "$wrapper_dir"
+    cat > "$wrapper_dir/sort" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+/usr/bin/sort "$@"
+for argument in "$@"; do
+    case "$argument" in
+        */staged.tsv)
+            mkdir -p "$(dirname "$CYBERPUNK_RACE_TARGET")"
+            case "$CYBERPUNK_RACE_ACTION" in
+                create) printf '%s\n' "$CYBERPUNK_RACE_VALUE" > "$CYBERPUNK_RACE_TARGET" ;;
+                append) printf '%s\n' "$CYBERPUNK_RACE_VALUE" >> "$CYBERPUNK_RACE_TARGET" ;;
+                *) exit 64 ;;
+            esac
+            ;;
+    esac
+done
+EOF
+    chmod +x "$wrapper_dir/sort"
+}
+
+make_restore_failure_wrapper() {
+    local wrapper_dir="$1"
+
+    mkdir -p "$wrapper_dir"
+    cat > "$wrapper_dir/cp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source_path=""
+for argument in "$@"; do
+    case "$argument" in
+        -*) continue ;;
+        *) source_path="$argument"; break ;;
+    esac
+done
+case "$source_path" in
+    */backup.*) exit 73 ;;
+esac
+exec /bin/cp "$@"
+EOF
+    chmod +x "$wrapper_dir/cp"
+}
+
+run_cli_with_race() {
+    local project="$1"
+    local path_prefix="$2"
+    local target="$3"
+    local action="$4"
+    local value="$5"
+    shift 5
+    (
+        cd "$project"
+        CYBERPUNK_RACE_TARGET="$target" \
+        CYBERPUNK_RACE_ACTION="$action" \
+        CYBERPUNK_RACE_VALUE="$value" \
+        PATH="$path_prefix:$PATH" \
+            "$CYBERPUNK_BIN" "$@"
+    )
+}
+
 assert_not_path() {
     local path="$1"
     [[ ! -e "$path" && ! -L "$path" ]] || fail "unexpected path: $path"
@@ -371,6 +461,90 @@ assert_eq "$rollback_manifest_before" "$(cksum "$rollback_project/.cyberpunk/gen
 assert_eq "$rollback_codex_before" "$(cksum "$rollback_project/.codex/agents/fixer.toml")" "failed transaction did not restore a Codex agent"
 assert_eq "$rollback_claude_before" "$(cksum "$rollback_project/.claude/agents/fixer.md")" "failed transaction did not restore a Claude agent"
 [[ ! -e "$rollback_project/.claude/agents/coder.md" ]] || fail "failed transaction left a newly installed Claude agent"
+
+test_start "a handled signal after manifest commit keeps committed assets and manifest together"
+signal_project="$SANDBOX_ROOT/post-commit-signal"
+mkdir -p "$signal_project"
+assert_exit 0 run_cli "$signal_project" init --runtime codex
+signal_manifest_before="$(cksum "$signal_project/.cyberpunk/generated.yml")"
+signal_fixer_before="$(cksum "$signal_project/.codex/agents/fixer.toml")"
+replace_exact_line "$signal_project/.cyberpunk/config.yml" '      codex: "gpt-5.6-sol"' '      codex: "signal-model"'
+signal_wrapper="$SANDBOX_ROOT/post-commit-signal-bin"
+make_post_commit_signal_wrapper "$signal_wrapper"
+capture run_cli_with_path "$signal_project" "$signal_wrapper" sync --force
+assert_eq 143 "$COMMAND_STATUS" "post-commit signal did not interrupt synchronization"
+assert_contains "$(<"$signal_project/.codex/agents/fixer.toml")" 'model = "signal-model"' "post-commit signal rolled back committed assets"
+[[ "$signal_manifest_before" != "$(cksum "$signal_project/.cyberpunk/generated.yml")" ]] || fail "post-commit signal kept the old manifest"
+[[ "$signal_fixer_before" != "$(cksum "$signal_project/.codex/agents/fixer.toml")" ]] || fail "post-commit signal kept the old native agent"
+assert_exit 0 bash -c 'source "$1"; validate_generated_manifest "$2"' _ "$REPO_ROOT/lib/generated-assets.bash" "$signal_project/.cyberpunk/generated.yml"
+
+test_start "an absent destination created after staging is preserved as a collision"
+absent_race_project="$SANDBOX_ROOT/absent-race"
+mkdir -p "$absent_race_project"
+absent_race_wrapper="$SANDBOX_ROOT/absent-race-bin"
+make_staging_race_wrapper "$absent_race_wrapper"
+absent_race_target="$absent_race_project/.codex/agents/coder.toml"
+capture run_cli_with_race \
+    "$absent_race_project" \
+    "$absent_race_wrapper" \
+    "$absent_race_target" \
+    create \
+    'concurrent-user-collision' \
+    init --runtime codex
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision after staging" "absent-path race was not detected"
+assert_eq 'concurrent-user-collision' "$(<"$absent_race_target")" "absent-path race overwrote the user collision"
+[[ ! -e "$absent_race_project/.cyberpunk/generated.yml" ]] || fail "absent-path race committed a manifest"
+
+test_start "a forced sync preserves owned drift introduced after staging"
+drift_race_project="$SANDBOX_ROOT/drift-race"
+mkdir -p "$drift_race_project"
+assert_exit 0 run_cli "$drift_race_project" init --runtime codex
+drift_race_manifest_before="$(cksum "$drift_race_project/.cyberpunk/generated.yml")"
+drift_race_fixer_before="$(cksum "$drift_race_project/.codex/agents/fixer.toml")"
+replace_exact_line "$drift_race_project/.cyberpunk/config.yml" '      codex: "gpt-5.6-sol"' '      codex: "race-model"'
+drift_race_wrapper="$SANDBOX_ROOT/drift-race-bin"
+make_staging_race_wrapper "$drift_race_wrapper"
+drift_race_target="$drift_race_project/.codex/agents/mind.toml"
+capture run_cli_with_race \
+    "$drift_race_project" \
+    "$drift_race_wrapper" \
+    "$drift_race_target" \
+    append \
+    'concurrent-user-drift' \
+    sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "drift after staging" "owned-path race was not detected"
+assert_contains "$(<"$drift_race_target")" 'concurrent-user-drift' "forced sync overwrote concurrent drift"
+assert_eq "$drift_race_manifest_before" "$(cksum "$drift_race_project/.cyberpunk/generated.yml")" "owned-path race changed the manifest"
+assert_eq "$drift_race_fixer_before" "$(cksum "$drift_race_project/.codex/agents/fixer.toml")" "owned-path race did not roll back an earlier install"
+
+test_start "an incomplete rollback preserves exact backup bytes for manual recovery"
+recovery_project="$SANDBOX_ROOT/recovery"
+mkdir -p "$recovery_project"
+assert_exit 0 run_cli "$recovery_project" init
+recovery_manifest_before="$(cksum "$recovery_project/.cyberpunk/generated.yml")"
+recovery_fixer_before="$(cksum "$recovery_project/.codex/agents/fixer.toml" | awk '{ print $1 " " $2 }')"
+replace_exact_line "$recovery_project/.cyberpunk/config.yml" '      codex: "gpt-5.6-sol"' '      codex: "recovery-model"'
+replace_exact_line "$recovery_project/.cyberpunk/config.yml" '      claude: "opus"' '      claude: "recovery-model"'
+replace_exact_line "$recovery_project/.cyberpunk/config.yml" '      cursor: "gpt-5.6-sol"' '      cursor: "recovery-model"'
+recovery_wrapper="$SANDBOX_ROOT/recovery-bin"
+make_restore_failure_wrapper "$recovery_wrapper"
+chmod 500 "$recovery_project/.cursor/agents"
+capture run_cli_with_path "$recovery_project" "$recovery_wrapper" sync --force
+chmod 700 "$recovery_project/.cursor/agents"
+assert_eq 1 "$COMMAND_STATUS"
+assert_eq "$recovery_manifest_before" "$(cksum "$recovery_project/.cyberpunk/generated.yml")" "incomplete rollback changed the manifest"
+recovery_workspace="$(printf '%s\n' "$COMMAND_OUTPUT" | sed -n 's/^Generated asset recovery workspace preserved: //p' | tail -n 1)"
+[[ -n "$recovery_workspace" ]] || fail "incomplete rollback did not report a recovery workspace"
+assert_dir "$recovery_workspace"
+recovery_backup="$(awk -F '\t' '$1 == ".codex/agents/fixer.toml" { print $3; exit }' "$recovery_workspace/rollback.tsv")"
+assert_file "$recovery_backup"
+assert_eq "$recovery_fixer_before" "$(cksum "$recovery_backup" | awk '{ print $1 " " $2 }')" "preserved rollback backup does not contain the prior Fixer bytes"
+case "$recovery_workspace" in
+    "${TMPDIR:-/tmp}"/cyberpunk-generated.*) rm -rf "$recovery_workspace" ;;
+    *) fail "refusing to clean unexpected recovery workspace: $recovery_workspace" ;;
+esac
 
 test_start "owned native agent drift is preserved without force and regenerated with force"
 drift_project="$SANDBOX_ROOT/drift"
