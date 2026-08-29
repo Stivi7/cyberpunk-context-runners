@@ -5,10 +5,16 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$TESTS_DIR/test_helper.bash"
 
+SANDBOX_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-documentation-test.XXXXXX")"
+trap 'rm -rf "$SANDBOX_ROOT"' EXIT
+project="$SANDBOX_ROOT/project"
+mkdir -p "$project"
+(cd "$project" && "$CYBERPUNK_BIN" init >/dev/null)
+
 adapters=(
-    "$REPO_ROOT/templates/AGENTS.md"
-    "$REPO_ROOT/templates/CLAUDE.md"
-    "$REPO_ROOT/templates/.cursor/rules/rules.mdc"
+    "$project/AGENTS.md"
+    "$project/CLAUDE.md"
+    "$project/.cursor/rules/cyberpunk.mdc"
 )
 
 test_start "runtime adapters are thin pointers to the canonical team"
@@ -16,7 +22,7 @@ for adapter in "${adapters[@]}"; do
     assert_file "$adapter"
     content="$(<"$adapter")"
     assert_contains "$content" ".cyberpunk/workflow.md" "adapter workflow pointer"
-    assert_contains "$content" "agents/nexus.md" "adapter Nexus pointer"
+    assert_contains "$content" "Nexus" "adapter Nexus pointer"
     line_count="$(wc -l < "$adapter" | tr -d ' ')"
     if [[ "$line_count" -gt 35 ]]; then
         fail "adapter duplicates too much policy: $adapter ($line_count lines)"

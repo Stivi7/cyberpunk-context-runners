@@ -51,6 +51,13 @@ codex_project="$SANDBOX_ROOT/codex"
 mkdir -p "$codex_project"
 assert_exit 0 run_cli "$codex_project" init --runtime codex
 assert_contains "$(<"$codex_project/.cyberpunk/config.yml")" "enabled: [codex]"
+assert_file "$codex_project/AGENTS.md"
+assert_eq 1 "$(line_count '<!-- cyberpunk:start -->' "$codex_project/AGENTS.md")" "managed block start count"
+assert_eq 1 "$(line_count '<!-- cyberpunk:end -->' "$codex_project/AGENTS.md")" "managed block end count"
+assert_file "$codex_project/.codex/config.toml"
+assert_contains "$(<"$codex_project/.codex/config.toml")" "max_concurrent_threads_per_session = 3"
+[[ ! -e "$codex_project/CLAUDE.md" ]] || fail "Codex-only init created CLAUDE.md"
+[[ ! -e "$codex_project/.cursor/rules/cyberpunk.mdc" ]] || fail "Codex-only init created Cursor adapter"
 
 test_start "plain init restores all runtimes after limited initialization"
 assert_exit 0 run_cli "$codex_project" init
@@ -84,11 +91,15 @@ assert_eq 1 "$(line_count ".worktrees/" "$project/.gitignore")" "idempotent work
 test_start "force refreshes framework files but preserves custom skills"
 mkdir -p "$project/skills/project/custom-review"
 printf '%s\n' "custom-skill-content" > "$project/skills/project/custom-review/SKILL.md"
+printf '%s\n' "agents-user-sentinel" >> "$project/AGENTS.md"
+printf '%s\n' "claude-user-sentinel" >> "$project/CLAUDE.md"
 custom_before="$(cksum "$project/skills/project/custom-review/SKILL.md")"
 assert_exit 0 run_cli "$project" init --force
 assert_not_contains "$(<"$project/agents/nexus.md")" "user-marker"
 assert_not_contains "$(<"$project/agents/fixer.md")" "fixer-user-marker"
 assert_not_contains "$(<"$project/skills/core/requirements-discovery/SKILL.md")" "discovery-user-marker"
+assert_contains "$(<"$project/AGENTS.md")" "agents-user-sentinel" "force erased AGENTS user content"
+assert_contains "$(<"$project/CLAUDE.md")" "claude-user-sentinel" "force erased CLAUDE user content"
 custom_after="$(cksum "$project/skills/project/custom-review/SKILL.md")"
 assert_eq "$custom_before" "$custom_after" "custom skill checksum"
 
