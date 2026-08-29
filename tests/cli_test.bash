@@ -52,6 +52,10 @@ mkdir -p "$codex_project"
 assert_exit 0 run_cli "$codex_project" init --runtime codex
 assert_contains "$(<"$codex_project/.cyberpunk/config.yml")" "enabled: [codex]"
 
+test_start "plain init restores all runtimes after limited initialization"
+assert_exit 0 run_cli "$codex_project" init
+assert_contains "$(<"$codex_project/.cyberpunk/config.yml")" "enabled: [codex, claude, cursor]"
+
 test_start "init normalizes repeated runtime selections"
 multi_project="$SANDBOX_ROOT/multi"
 mkdir -p "$multi_project"

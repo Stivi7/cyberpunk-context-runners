@@ -58,6 +58,15 @@ for value in \
     assert_contains "$config_content" "$value" "configuration contract"
 done
 
+test_start "configuration uses the exact approved model profiles and role mappings"
+for block in \
+    $'    deep:\n      codex: "gpt-5.6-sol"\n      claude: "opus"\n      cursor: "gpt-5.6-sol"' \
+    $'    balanced:\n      codex: "gpt-5.6-terra"\n      claude: "sonnet"\n      cursor: "composer-2.5[]"' \
+    $'    fast:\n      codex: "gpt-5.6-luna"\n      claude: "haiku"\n      cursor: "composer-2.5"' \
+    $'  roles:\n    nexus: deep\n    fixer: deep\n    operator: fast\n    mind: deep\n    interrogator: deep\n    fragmenter: balanced\n    coder: balanced\n    daemon: balanced\n    neon: balanced\n    grid-master: balanced\n    gatekeeper: deep'; do
+    assert_contains "$config_content" "$block" "exact model configuration"
+done
+
 test_start "workflow defines the complete job lifecycle"
 workflow_content="$(<"$WORKFLOW")"
 for heading in \

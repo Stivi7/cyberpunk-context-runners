@@ -227,7 +227,7 @@ init_project() {
                 write_configured_runtimes ".cyberpunk/config.yml" "${REQUESTED_RUNTIMES[@]}"
             fi
         else
-            merge_configured_runtimes ".cyberpunk/config.yml"
+            merge_configured_runtimes ".cyberpunk/config.yml" all
         fi
         sync_project
     fi
