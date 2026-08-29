@@ -7,6 +7,7 @@ GENERATED_MANIFEST_WORKDIR=""
 GENERATED_STAGED_ASSETS=""
 GENERATED_STAGED_SORTED=""
 GENERATED_ROLLBACK_LOG=""
+GENERATED_TRANSACTION_COMMITTED=false
 GENERATED_MANIFEST_FAILED=false
 GENERATED_ACTIVE_TEMP=""
 GENERATED_PREVIOUS_HUP_TRAP=""
@@ -106,6 +107,16 @@ restore_generated_signal_traps() {
     [[ -z "$previous_hup" ]] || eval "$previous_hup"
     [[ -z "$previous_int" ]] || eval "$previous_int"
     [[ -z "$previous_term" ]] || eval "$previous_term"
+}
+
+mask_generated_commit_signals() {
+    trap '' HUP INT TERM
+}
+
+resume_generated_transaction_signals() {
+    trap 'abort_generated_manifest_transaction; exit 129' HUP
+    trap 'abort_generated_manifest_transaction; exit 130' INT
+    trap 'abort_generated_manifest_transaction; exit 143' TERM
 }
 
 load_generated_manifest_records() {
@@ -231,6 +242,8 @@ cleanup_generated_manifest() {
     local cleanup_status=0
     local staged_destination
     local staged_content
+    local staged_expected_state
+    local staged_expected_hash
     local rollback_destination
     local rollback_existed
     local rollback_backup
@@ -239,7 +252,7 @@ cleanup_generated_manifest() {
         discard_temp_file "$GENERATED_ACTIVE_TEMP" || cleanup_status=1
     fi
     if [[ -n "$GENERATED_STAGED_ASSETS" && -f "$GENERATED_STAGED_ASSETS" ]]; then
-        while IFS=$'\t' read -r staged_destination staged_content; do
+        while IFS=$'\t' read -r staged_destination staged_content staged_expected_state staged_expected_hash; do
             [[ -n "$staged_content" ]] || continue
             discard_temp_file "$staged_content" || cleanup_status=1
         done < "$GENERATED_STAGED_ASSETS"
@@ -269,6 +282,7 @@ cleanup_generated_manifest() {
     GENERATED_STAGED_ASSETS=""
     GENERATED_STAGED_SORTED=""
     GENERATED_ROLLBACK_LOG=""
+    GENERATED_TRANSACTION_COMMITTED=false
     GENERATED_MANIFEST_FAILED=false
     GENERATED_ACTIVE_TEMP=""
     restore_generated_signal_traps
@@ -302,6 +316,7 @@ begin_generated_manifest() {
     GENERATED_STAGED_ASSETS="$GENERATED_MANIFEST_WORKDIR/staged.tsv"
     GENERATED_STAGED_SORTED="$GENERATED_MANIFEST_WORKDIR/staged.sorted.tsv"
     GENERATED_ROLLBACK_LOG="$GENERATED_MANIFEST_WORKDIR/rollback.tsv"
+    GENERATED_TRANSACTION_COMMITTED=false
     if ! : > "$GENERATED_MANIFEST_INDEX"; then
         cleanup_generated_manifest
         return 1
@@ -428,6 +443,8 @@ replace_generated_file() {
 stage_generated_file() {
     local destination="$1"
     local content_file="$2"
+    local expected_state="$3"
+    local expected_hash="$4"
     local staged_content
 
     if ! staged_content="$(mktemp "$GENERATED_MANIFEST_WORKDIR/asset.XXXXXX")"; then
@@ -439,7 +456,9 @@ stage_generated_file() {
         discard_temp_file "$staged_content" || true
         return 1
     fi
-    if ! printf '%s\t%s\n' "$destination" "$staged_content" >> "$GENERATED_STAGED_ASSETS"; then
+    if ! printf '%s\t%s\t%s\t%s\n' \
+        "$destination" "$staged_content" "$expected_state" "$expected_hash" \
+        >> "$GENERATED_STAGED_ASSETS"; then
         discard_temp_file "$staged_content" || true
         return 1
     fi
@@ -499,6 +518,8 @@ write_generated_asset() {
     local prior_kind=""
     local prior_identifier=""
     local prior_hash=""
+    local expected_state=absent
+    local expected_hash=""
 
     if [[ -z "$GENERATED_MANIFEST_PATH" ]]; then
         printf 'Generated asset manifest has not been started\n' >&2
@@ -547,9 +568,11 @@ EOF
             GENERATED_MANIFEST_FAILED=true
             return 1
         fi
+        expected_state=present
+        expected_hash="$actual_hash"
     fi
 
-    if ! stage_generated_file "$relative_path" "$content_file"; then
+    if ! stage_generated_file "$relative_path" "$content_file" "$expected_state" "$expected_hash"; then
         GENERATED_MANIFEST_FAILED=true
         return 1
     fi
@@ -629,6 +652,9 @@ discard_generated_rollback_backups() {
 install_staged_generated_assets() {
     local destination
     local staged_content
+    local expected_state
+    local expected_hash
+    local actual_hash
     local existed
     local backup
 
@@ -639,8 +665,33 @@ install_staged_generated_assets() {
         return 1
     fi
 
-    while IFS=$'\t' read -r destination staged_content; do
+    while IFS=$'\t' read -r destination staged_content expected_state expected_hash; do
         [[ -n "$destination" && -n "$staged_content" ]] || continue
+        case "$expected_state" in
+            absent)
+                if generated_path_exists "$destination"; then
+                    printf 'Generated asset collision after staging: %s changed from absent to present\n' "$destination" >&2
+                    return 1
+                fi
+                ;;
+            present)
+                if [[ ! -f "$destination" || -L "$destination" ]]; then
+                    printf 'Generated asset drift after staging: %s changed type or disappeared\n' "$destination" >&2
+                    return 1
+                fi
+                if ! actual_hash="$(sha256_file "$destination")"; then
+                    return 1
+                fi
+                if [[ "$actual_hash" != "$expected_hash" ]]; then
+                    printf 'Generated asset drift after staging: %s changed concurrently\n' "$destination" >&2
+                    return 1
+                fi
+                ;;
+            *)
+                printf 'Invalid generated asset staging state for: %s\n' "$destination" >&2
+                return 1
+                ;;
+        esac
         if [[ -f "$destination" && ! -L "$destination" ]] && cmp -s "$destination" "$staged_content"; then
             continue
         fi
@@ -680,11 +731,17 @@ install_staged_generated_assets() {
 abort_generated_manifest_transaction() {
     local abort_status=0
 
+    if [[ "$GENERATED_TRANSACTION_COMMITTED" == true ]]; then
+        cleanup_generated_manifest
+        return $?
+    fi
     if [[ -n "$GENERATED_ACTIVE_TEMP" ]] && ! discard_temp_file "$GENERATED_ACTIVE_TEMP"; then
         abort_status=1
     fi
     if ! rollback_generated_assets; then
-        abort_status=1
+        preserve_generated_recovery_workspace
+        printf 'Generated asset transaction rollback was incomplete\n' >&2
+        return 1
     fi
     if ! cleanup_generated_manifest; then
         abort_status=1
@@ -692,19 +749,30 @@ abort_generated_manifest_transaction() {
     return "$abort_status"
 }
 
-rollback_failed_generated_transaction() {
-    local rollback_status=0
+preserve_generated_recovery_workspace() {
+    local recovery_workspace="$GENERATED_MANIFEST_WORKDIR"
 
+    restore_generated_signal_traps
+    GENERATED_MANIFEST_PATH=""
+    GENERATED_MANIFEST_INDEX=""
+    GENERATED_MANIFEST_RECORDS=""
+    GENERATED_MANIFEST_WORKDIR=""
+    GENERATED_STAGED_ASSETS=""
+    GENERATED_STAGED_SORTED=""
+    GENERATED_ROLLBACK_LOG=""
+    GENERATED_TRANSACTION_COMMITTED=false
+    GENERATED_MANIFEST_FAILED=false
+    GENERATED_ACTIVE_TEMP=""
+    printf 'Generated asset recovery workspace preserved: %s\n' "$recovery_workspace" >&2
+}
+
+rollback_failed_generated_transaction() {
     if ! rollback_generated_assets; then
-        rollback_status=1
-    fi
-    if ! cleanup_generated_manifest; then
-        rollback_status=1
-    fi
-    if [[ "$rollback_status" -ne 0 ]]; then
+        preserve_generated_recovery_workspace
         printf 'Generated asset transaction rollback was incomplete\n' >&2
+        return 1
     fi
-    return "$rollback_status"
+    cleanup_generated_manifest
 }
 
 yaml_double_quote() {
@@ -792,12 +860,16 @@ finish_generated_manifest() {
         fi
         return 1
     fi
+    mask_generated_commit_signals
     if ! commit_temp_file "$temporary" "$GENERATED_MANIFEST_PATH"; then
+        resume_generated_transaction_signals
         if ! rollback_failed_generated_transaction; then
             : # Detailed rollback errors were already emitted.
         fi
         return 1
     fi
+    GENERATED_TRANSACTION_COMMITTED=true
+    resume_generated_transaction_signals
     if ! discard_generated_rollback_backups; then
         cleanup_generated_manifest
         return 1
