@@ -28,7 +28,19 @@ assert_file "$TEMPLATE_ROOT/specs/.gitkeep"
 test_start "configuration is adaptive and integration-branch based"
 config_content="$(<"$CONFIG")"
 for value in \
-    "version: 1" \
+    "version: 2" \
+    "runtimes:" \
+    "enabled: [codex, claude, cursor]" \
+    "execution:" \
+    "parallelism: auto" \
+    "max_concurrent_agents: 3" \
+    "unavailable_runtime_fallback: sequential" \
+    "models:" \
+    "fallback: inherit" \
+    "profiles:" \
+    "cursor: \"composer-2.5[]\"" \
+    "roles:" \
+    "overrides: {}" \
     "default: integration-branch" \
     "mode: adaptive" \
     "integration_branch: auto" \
