@@ -15,9 +15,9 @@ sha256_file() {
     local path="$1"
 
     if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$path" | awk '{ print $1 }'
+        shasum -a 256 "$path" | awk '{ value=$1; sub(/^\\/, "", value); print value }'
     elif command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$path" | awk '{ print $1 }'
+        sha256sum "$path" | awk '{ value=$1; sub(/^\\/, "", value); print value }'
     else
         printf 'No SHA-256 tool found; install shasum or sha256sum\n' >&2
         return 1
@@ -135,7 +135,7 @@ load_generated_manifest_records() {
                         return ""
                     }
                     decoded=decoded escaped
-                } else if (character == "\"" || character == "\t") {
+                } else if (character == "\"" || character == "\t" || character == "\r") {
                     invalid=1
                     return ""
                 } else {
@@ -327,15 +327,26 @@ record_generated_asset() {
     local identifier="$5"
     local hash="$6"
     local updated
+    local record_path
+    local record_source
+    local record_runtime
+    local record_kind
+    local record_identifier
+    local record_hash
 
     if ! updated="$(mktemp "$GENERATED_MANIFEST_WORKDIR/records.updated.XXXXXX")"; then
         return 1
     fi
     GENERATED_ACTIVE_TEMP="$updated"
-    if ! awk -F '\t' -v path="$path" '$1 != path' "$GENERATED_MANIFEST_RECORDS" > "$updated"; then
-        discard_temp_file "$updated" || true
-        return 1
-    fi
+    while IFS=$'\t' read -r record_path record_source record_runtime record_kind record_identifier record_hash; do
+        [[ "$record_path" == "$path" ]] && continue
+        if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$record_path" "$record_source" "$record_runtime" "$record_kind" "$record_identifier" "$record_hash" \
+            >> "$updated"; then
+            discard_temp_file "$updated" || true
+            return 1
+        fi
+    done < "$GENERATED_MANIFEST_RECORDS"
     if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$path" "$source" "$runtime" "$kind" "$identifier" "$hash" >> "$updated"; then
         discard_temp_file "$updated" || true
         return 1
@@ -381,6 +392,38 @@ generated_path_exists() {
     [[ -e "$1" || -L "$1" ]]
 }
 
+find_generated_record() {
+    local wanted_path="$1"
+    local index_path="$2"
+    local record_path
+    local record_source
+    local record_runtime
+    local record_kind
+    local record_identifier
+    local record_hash
+
+    while IFS=$'\t' read -r record_path record_source record_runtime record_kind record_identifier record_hash; do
+        if [[ "$record_path" == "$wanted_path" ]]; then
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$record_path" "$record_source" "$record_runtime" "$record_kind" "$record_identifier" "$record_hash"
+            return 0
+        fi
+    done < "$index_path"
+    return 1
+}
+
+validate_generated_manifest_field() {
+    local field_name="$1"
+    local value="$2"
+
+    case "$value" in
+        *$'\t'*|*$'\r'*|*$'\n'*)
+            printf 'Invalid generated manifest field %s: raw tab, CR, and LF bytes are not allowed\n' "$field_name" >&2
+            return 1
+            ;;
+    esac
+}
+
 write_generated_asset() {
     local destination="$1"
     local source="$2"
@@ -403,6 +446,14 @@ write_generated_asset() {
         printf 'Generated asset manifest has not been started\n' >&2
         return 1
     fi
+    if ! validate_generated_manifest_field path "$relative_path" ||
+        ! validate_generated_manifest_field source "$source" ||
+        ! validate_generated_manifest_field runtime "$runtime" ||
+        ! validate_generated_manifest_field kind "$kind" ||
+        ! validate_generated_manifest_field identifier "$identifier"; then
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
     if [[ ! -f "$content_file" ]]; then
         printf 'Generated asset content file not found: %s\n' "$content_file" >&2
         GENERATED_MANIFEST_FAILED=true
@@ -413,7 +464,11 @@ write_generated_asset() {
         GENERATED_MANIFEST_FAILED=true
         return 1
     }
-    prior_record="$(awk -F '\t' -v path="$relative_path" '$1 == path { print; exit }' "$GENERATED_MANIFEST_INDEX")"
+    if prior_record="$(find_generated_record "$relative_path" "$GENERATED_MANIFEST_INDEX")"; then
+        :
+    else
+        prior_record=""
+    fi
     if [[ -n "$prior_record" ]]; then
         IFS=$'\t' read -r prior_path prior_source prior_runtime prior_kind prior_identifier prior_hash <<EOF
 $prior_record
