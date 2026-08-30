@@ -387,8 +387,89 @@ register_runtime_agents() {
 
 CANONICAL_SKILL_NAMES=("")
 CANONICAL_SKILL_DESCRIPTIONS=("")
+CANONICAL_SKILL_DESCRIPTION_YAMLS=("")
 CANONICAL_SKILL_SOURCES=("")
 CANONICAL_SKILL_COUNT=0
+
+parse_canonical_skill_string() {
+    local field="$1"
+    local line="$2"
+    local value
+    local decoded=""
+    local character
+    local next_character
+    local index=0
+    local quoted=false
+
+    value="${line#"$field:"}"
+    if [[ "$value" != [[:space:]]* ]]; then
+        return 1
+    fi
+    value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -n "$value" ]] || return 1
+
+    case "$value" in
+        \"*)
+            quoted=true
+            [[ "${value#\"}" != "$value" && "${value%\"}" != "$value" && ${#value} -ge 2 ]] || return 1
+            value="${value#\"}"
+            value="${value%\"}"
+            while [[ "$index" -lt "${#value}" ]]; do
+                character="${value:$index:1}"
+                if [[ "$character" == '\\' ]]; then
+                    index=$((index + 1))
+                    [[ "$index" -lt "${#value}" ]] || return 1
+                    next_character="${value:$index:1}"
+                    case "$next_character" in
+                        '\\'|\") decoded="$decoded$next_character" ;;
+                        *) return 1 ;;
+                    esac
+                elif [[ "$character" == \" ]]; then
+                    return 1
+                else
+                    decoded="$decoded$character"
+                fi
+                index=$((index + 1))
+            done
+            ;;
+        \'*)
+            quoted=true
+            [[ "${value#\'}" != "$value" && "${value%\'}" != "$value" && ${#value} -ge 2 ]] || return 1
+            value="${value#\'}"
+            value="${value%\'}"
+            while [[ "$index" -lt "${#value}" ]]; do
+                character="${value:$index:1}"
+                if [[ "$character" == "'" ]]; then
+                    index=$((index + 1))
+                    [[ "$index" -lt "${#value}" && "${value:$index:1}" == "'" ]] || return 1
+                fi
+                decoded="$decoded$character"
+                index=$((index + 1))
+            done
+            ;;
+        *)
+            case "$value" in
+                \[*|\{*|\**|\&*|\!*|\|*|\>*|\#*|\?\ *|-\ *|~|null|NULL|Null|true|TRUE|True|false|FALSE|False|yes|YES|Yes|no|NO|No|on|ON|On|off|OFF|Off|*': '*|*' #'*)
+                    return 1
+                    ;;
+            esac
+            if [[ "$value" =~ ^-?[0-9]+([.][0-9]+)?$ || "$value" =~ ^0[xX][0-9A-Fa-f]+$ ]]; then
+                return 1
+            fi
+            decoded="$value"
+            ;;
+    esac
+
+    case "$decoded" in
+        *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+    esac
+    CANONICAL_SKILL_STRING="$decoded"
+    if [[ "$quoted" == true ]]; then
+        CANONICAL_SKILL_YAML_STRING="\"$(escape_native_quoted_string "$decoded")\""
+    else
+        CANONICAL_SKILL_YAML_STRING="$decoded"
+    fi
+}
 
 read_canonical_skill_frontmatter() {
     local path="$1"
@@ -398,6 +479,7 @@ read_canonical_skill_frontmatter() {
     local description_count=0
     local name=""
     local description=""
+    local description_yaml=""
 
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" == "---" ]]; then
@@ -409,13 +491,20 @@ read_canonical_skill_frontmatter() {
         case "$line" in
             name:*)
                 name_count=$((name_count + 1))
-                name="${line#name:}"
-                name="$(printf '%s' "$name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+                parse_canonical_skill_string name "$line" || {
+                    log_error "Invalid canonical skill frontmatter: $path"
+                    return 1
+                }
+                name="$CANONICAL_SKILL_STRING"
                 ;;
             description:*)
                 description_count=$((description_count + 1))
-                description="${line#description:}"
-                description="$(printf '%s' "$description" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+                parse_canonical_skill_string description "$line" || {
+                    log_error "Invalid canonical skill frontmatter: $path"
+                    return 1
+                }
+                description="$CANONICAL_SKILL_STRING"
+                description_yaml="$CANONICAL_SKILL_YAML_STRING"
                 ;;
         esac
     done < "$path"
@@ -424,15 +513,9 @@ read_canonical_skill_frontmatter() {
         log_error "Invalid canonical skill frontmatter: $path"
         return 1
     fi
-    case "$name$description" in
-        *$'\n'*|*$'\r'*|*$'\t'*)
-            log_error "Canonical skill metadata contains an unsupported delimiter: $path"
-            return 1
-            ;;
-    esac
-
     CANONICAL_SKILL_NAME="$name"
     CANONICAL_SKILL_DESCRIPTION="$description"
+    CANONICAL_SKILL_DESCRIPTION_YAML="$description_yaml"
 }
 
 discover_canonical_skill() {
@@ -442,6 +525,10 @@ discover_canonical_skill() {
     local index
 
     read_canonical_skill_frontmatter "$path" || return 1
+    if [[ ! "$CANONICAL_SKILL_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        log_error "Invalid canonical skill identifier: $CANONICAL_SKILL_NAME"
+        return 1
+    fi
     for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
         known_name="${CANONICAL_SKILL_NAMES[$index]}"
         if [[ "$known_name" == "$CANONICAL_SKILL_NAME" ]]; then
@@ -451,6 +538,7 @@ discover_canonical_skill() {
     done
     CANONICAL_SKILL_NAMES[$CANONICAL_SKILL_COUNT]="$CANONICAL_SKILL_NAME"
     CANONICAL_SKILL_DESCRIPTIONS[$CANONICAL_SKILL_COUNT]="$CANONICAL_SKILL_DESCRIPTION"
+    CANONICAL_SKILL_DESCRIPTION_YAMLS[$CANONICAL_SKILL_COUNT]="$CANONICAL_SKILL_DESCRIPTION_YAML"
     CANONICAL_SKILL_SOURCES[$CANONICAL_SKILL_COUNT]="$source"
     CANONICAL_SKILL_COUNT=$((CANONICAL_SKILL_COUNT + 1))
 }
@@ -463,6 +551,7 @@ discover_canonical_skills() {
 
     CANONICAL_SKILL_NAMES=("")
     CANONICAL_SKILL_DESCRIPTIONS=("")
+    CANONICAL_SKILL_DESCRIPTION_YAMLS=("")
     CANONICAL_SKILL_SOURCES=("")
     CANONICAL_SKILL_COUNT=0
 
@@ -474,6 +563,10 @@ discover_canonical_skills() {
 
     while IFS= read -r identifier; do
         [[ -n "$identifier" ]] || continue
+        if [[ ! "$identifier" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+            log_error "Invalid enabled project skill identifier: $identifier"
+            return 1
+        fi
         path="skills/project/$identifier/SKILL.md"
         if [[ ! -f "$path" ]]; then
             log_error "Enabled project skill is missing its canonical file: $identifier"
@@ -495,14 +588,14 @@ discover_canonical_skills() {
 render_native_skill() {
     local source="$1"
     local name="$2"
-    local description="$3"
+    local description_yaml="$3"
     local destination="$4"
 
     {
         printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->'
         printf '%s\n' '---'
         printf 'name: %s\n' "$name"
-        printf 'description: %s\n' "$description"
+        printf 'description: %s\n' "$description_yaml"
         printf '%s\n\n' '---'
         printf 'Read `../../../%s` completely and follow it.\n' "$source"
         printf '%s\n' 'Resolve every referenced script, template, reference, or asset relative to that canonical skill directory.'
@@ -515,6 +608,7 @@ register_runtime_skills() {
     local source
     local name
     local description
+    local description_yaml
     local destination
     local content_file
 
@@ -522,6 +616,7 @@ register_runtime_skills() {
         source="${CANONICAL_SKILL_SOURCES[$index]}"
         name="${CANONICAL_SKILL_NAMES[$index]}"
         description="${CANONICAL_SKILL_DESCRIPTIONS[$index]}"
+        description_yaml="${CANONICAL_SKILL_DESCRIPTION_YAMLS[$index]}"
         case "$runtime" in
             codex) destination=".agents/skills/$name/SKILL.md" ;;
             claude) destination=".claude/skills/$name/SKILL.md" ;;
@@ -535,7 +630,7 @@ register_runtime_skills() {
             log_error "Cannot create native skill content file"
             return 1
         fi
-        if ! render_native_skill "$source" "$name" "$description" "$content_file"; then
+        if ! render_native_skill "$source" "$name" "$description_yaml" "$content_file"; then
             rm -f "$content_file"
             return 1
         fi
@@ -549,6 +644,44 @@ register_runtime_skills() {
     done
 }
 
+is_current_canonical_skill_source() {
+    local source="$1"
+    local index
+
+    for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+        [[ "${CANONICAL_SKILL_SOURCES[$index]}" == "$source" ]] && return 0
+    done
+    return 1
+}
+
+is_native_skill_destination() {
+    local path="$1"
+    local runtime="$2"
+
+    case "$runtime:$path" in
+        codex:.agents/skills/*/SKILL.md|claude:.claude/skills/*/SKILL.md|cursor:.cursor/skills/*/SKILL.md)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+retire_disabled_project_skill_wrappers() {
+    local path
+    local source
+    local runtime
+    local kind
+    local identifier
+    local hash
+
+    while IFS=$'\t' read -r path source runtime kind identifier hash; do
+        [[ "$kind" == skill && "$source" == skills/project/*/SKILL.md ]] || continue
+        is_native_skill_destination "$path" "$runtime" || continue
+        is_current_canonical_skill_source "$source" && continue
+        retire_generated_asset "$path" || return 1
+    done < "$GENERATED_MANIFEST_INDEX"
+}
+
 sync_project() {
     local runtime
     local cursor_content=""
@@ -556,6 +689,10 @@ sync_project() {
     migrate_config_v1 ".cyberpunk/config.yml"
     discover_canonical_skills
     begin_generated_manifest ".cyberpunk/generated.yml"
+    if ! retire_disabled_project_skill_wrappers; then
+        cleanup_generated_manifest
+        return 1
+    fi
 
     while IFS= read -r runtime; do
         [[ -n "$runtime" ]] || continue

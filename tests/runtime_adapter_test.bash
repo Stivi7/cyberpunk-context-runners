@@ -333,6 +333,26 @@ replace_enabled_project_skills() {
     mv "$temporary" "$path"
 }
 
+set_enabled_project_skills() {
+    local path="$1"
+    local replacement="$2"
+    local temporary="$path.tmp"
+
+    awk -v replacement="$replacement" '
+        $0 ~ /^  enabled_project:/ {
+            print "  enabled_project: " replacement
+            replaced=1
+            if ($0 == "  enabled_project:") skip_list=1
+            next
+        }
+        skip_list && /^    -[[:space:]]*/ { next }
+        skip_list { skip_list=0 }
+        { print }
+        END { if (!replaced) exit 1 }
+    ' "$path" > "$temporary"
+    mv "$temporary" "$path"
+}
+
 replace_exact_line() {
     local path="$1"
     local before="$2"
@@ -541,6 +561,87 @@ for runtime in "${runtimes[@]}"; do
     assert_not_path "$(native_skill_path "$project_skills_project" "$runtime" unlisted)"
 done
 assert_eq "$project_skill_before" "$(cksum "$project_skills_project/skills/project/release-policy/SKILL.md")" "project canonical skill changed during sync"
+assert_exit 0 run_cli "$project_skills_project" sync --force
+assert_eq "$project_skill_before" "$(cksum "$project_skills_project/skills/project/release-policy/SKILL.md")" "project canonical skill changed during forced sync"
+
+test_start "disabled project skills retire owned wrappers and manifest records without touching unrelated assets"
+release_wrapper_codex="$(native_skill_path "$project_skills_project" codex release-policy)"
+release_wrapper_claude="$(native_skill_path "$project_skills_project" claude release-policy)"
+release_wrapper_cursor="$(native_skill_path "$project_skills_project" cursor release-policy)"
+printf '%s\n' 'local-disabled-skill-edit' >> "$release_wrapper_codex"
+set_enabled_project_skills "$project_skills_project/.cyberpunk/config.yml" '[]'
+release_manifest_before_retirement="$(cksum "$project_skills_project/.cyberpunk/generated.yml")"
+capture run_cli "$project_skills_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'drift' "disabled drifted project skill must not be deleted without force"
+assert_contains "$(<"$release_wrapper_codex")" 'local-disabled-skill-edit' "disabled drifted wrapper changed without force"
+assert_eq "$release_manifest_before_retirement" "$(cksum "$project_skills_project/.cyberpunk/generated.yml")" "disabled drift changed the manifest without force"
+assert_exit 0 run_cli "$project_skills_project" sync --force
+for release_wrapper in "$release_wrapper_codex" "$release_wrapper_claude" "$release_wrapper_cursor"; do
+    assert_not_path "$release_wrapper"
+done
+assert_not_contains "$(<"$project_skills_project/.cyberpunk/generated.yml")" 'skills/project/release-policy/SKILL.md' "disabled project skill manifest record remained"
+assert_file "$(native_skill_path "$project_skills_project" codex task-decomposition)"
+assert_file "$project_skills_project/.codex/agents/nexus.toml"
+mkdir -p "$(dirname "$release_wrapper_codex")"
+printf '%s\n' 'unowned-disabled-skill-wrapper' > "$release_wrapper_codex"
+assert_exit 0 run_cli "$project_skills_project" sync
+assert_eq 'unowned-disabled-skill-wrapper' "$(<"$release_wrapper_codex")" "disabled unowned wrapper was changed"
+assert_not_contains "$(<"$project_skills_project/.cyberpunk/generated.yml")" 'skills/project/release-policy/SKILL.md' "unowned disabled wrapper gained a manifest record"
+
+test_start "project skill configuration normalizes inline and block lists lexically"
+ordering_project="$SANDBOX_ROOT/project-skill-ordering"
+mkdir -p "$ordering_project"
+assert_exit 0 run_cli "$ordering_project" init --runtime codex
+for ordered_skill in alpha-policy zeta-policy; do
+    mkdir -p "$ordering_project/skills/project/$ordered_skill"
+    printf '%s\n' '---' "name: $ordered_skill" "description: Use when $ordered_skill is enabled." '---' > "$ordering_project/skills/project/$ordered_skill/SKILL.md"
+done
+set_enabled_project_skills "$ordering_project/.cyberpunk/config.yml" '[zeta-policy, alpha-policy, zeta-policy]'
+assert_exit 0 run_cli "$ordering_project" sync
+assert_file "$(native_skill_path "$ordering_project" codex alpha-policy)"
+assert_file "$(native_skill_path "$ordering_project" codex zeta-policy)"
+ordered_sources="$(awk -F '"' '/source: "skills\/project\// { print $2 }' "$ordering_project/.cyberpunk/generated.yml")"
+assert_eq $'skills/project/alpha-policy/SKILL.md\nskills/project/zeta-policy/SKILL.md' "$ordered_sources" "inline project skill list was not lexical and unique"
+set_enabled_project_skills "$ordering_project/.cyberpunk/config.yml" $'\n    - zeta-policy\n    - alpha-policy'
+assert_exit 0 run_cli "$ordering_project" sync --force
+ordered_sources="$(awk -F '"' '/source: "skills\/project\// { print $2 }' "$ordering_project/.cyberpunk/generated.yml")"
+assert_eq $'skills/project/alpha-policy/SKILL.md\nskills/project/zeta-policy/SKILL.md' "$ordered_sources" "block project skill list was not lexical"
+
+test_start "project skill discovery rejects traversal and non-string frontmatter before writes"
+traversal_project="$SANDBOX_ROOT/project-skill-traversal"
+mkdir -p "$traversal_project"
+assert_exit 0 run_cli "$traversal_project" init --runtime codex
+mkdir -p "$traversal_project/skills/escape"
+printf '%s\n' '---' 'name: escape' 'description: Use when traversal is attempted.' '---' > "$traversal_project/skills/escape/SKILL.md"
+set_enabled_project_skills "$traversal_project/.cyberpunk/config.yml" '[../escape]'
+capture run_cli "$traversal_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" '../escape' "project traversal identifier error"
+assert_not_path "$(native_skill_path "$traversal_project" codex escape)"
+
+metadata_project="$SANDBOX_ROOT/project-skill-metadata"
+mkdir -p "$metadata_project"
+assert_exit 0 run_cli "$metadata_project" init --runtime codex
+mkdir -p "$metadata_project/skills/project/release-policy"
+set_enabled_project_skills "$metadata_project/.cyberpunk/config.yml" '[release-policy]'
+malformed_metadata_names=(missing-whitespace block collection alias tag comment boolean)
+malformed_metadata_values=(
+    $'name:release-policy\ndescription: Use when metadata is malformed.'
+    $'name: release-policy\ndescription: |'
+    $'name: release-policy\ndescription: [not, a, string]'
+    $'name: *shared\ndescription: Use when metadata is malformed.'
+    $'name: !release-policy\ndescription: Use when metadata is malformed.'
+    $'name: release-policy\ndescription: Use when comments # truncate metadata.'
+    $'name: release-policy\ndescription: true'
+)
+for metadata_index in "${!malformed_metadata_names[@]}"; do
+    printf '%s\n' '---' "${malformed_metadata_values[$metadata_index]}" '---' > "$metadata_project/skills/project/release-policy/SKILL.md"
+    capture run_cli "$metadata_project" sync
+    assert_eq 1 "$COMMAND_STATUS"
+    assert_contains "$COMMAND_OUTPUT" 'Invalid canonical skill frontmatter' "${malformed_metadata_names[$metadata_index]} metadata error"
+    assert_not_path "$(native_skill_path "$metadata_project" codex release-policy)"
+done
 
 test_start "skill discovery rejects missing and ambiguous canonical project skills before wrapper writes"
 missing_project_skill_project="$SANDBOX_ROOT/missing-project-skill"
