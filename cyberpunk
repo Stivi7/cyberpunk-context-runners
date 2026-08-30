@@ -912,6 +912,321 @@ validate_skill_frontmatter() {
     [[ "$content" == *"name:"* && "$content" == *"description:"* ]]
 }
 
+validate_managed_instruction_block() {
+    local path="$1"
+    local start_count
+    local end_count
+    local start_line
+    local end_line
+
+    start_count="$(grep -Fxc '<!-- cyberpunk:start -->' "$path" 2>/dev/null || true)"
+    end_count="$(grep -Fxc '<!-- cyberpunk:end -->' "$path" 2>/dev/null || true)"
+    if [[ "$start_count" -ne 1 || "$end_count" -ne 1 ]]; then
+        log_error "Expected exactly one managed instruction block: $path"
+        return 1
+    fi
+    start_line="$(grep -Fn '<!-- cyberpunk:start -->' "$path" | cut -d: -f1)"
+    end_line="$(grep -Fn '<!-- cyberpunk:end -->' "$path" | cut -d: -f1)"
+    if [[ "$start_line" -ge "$end_line" ]]; then
+        log_error "Malformed managed instruction block: $path"
+        return 1
+    fi
+}
+
+validate_native_skill_wrapper() {
+    local path="$1"
+    local name="$2"
+    local description_yaml="$3"
+    local source="$4"
+    local failures=0
+    local content
+
+    content="$(<"$path")"
+    if [[ "$content" != *"name: \"$name\""* ]]; then
+        log_error "Native skill wrapper has wrong canonical name: $path (expected: $name)"
+        failures=$((failures + 1))
+    fi
+    if [[ "$content" != *"description: $description_yaml"* ]]; then
+        log_error "Native skill wrapper has wrong canonical description: $path"
+        failures=$((failures + 1))
+    fi
+    if [[ "$content" != *"../../../$source"* ]]; then
+        log_error "Native skill wrapper has wrong canonical source pointer: $path (expected: ../../../$source)"
+        failures=$((failures + 1))
+    fi
+    [[ "$failures" -eq 0 ]]
+}
+
+validate_expected_generated_asset() {
+    local records="$1"
+    local path="$2"
+    local source="$3"
+    local runtime="$4"
+    local kind="$5"
+    local identifier="$6"
+    local record_count
+    local record
+    local record_source
+    local record_runtime
+    local record_kind
+    local record_identifier
+
+    record_count="$(awk -F $'\t' -v path="$path" '$1 == path { count++ } END { print count + 0 }' "$records")"
+    if [[ "$record_count" -eq 0 ]]; then
+        if [[ -e "$path" || -L "$path" ]]; then
+            log_error "Native identifier collision at expected path without manifest record: $path"
+        else
+            log_error "Missing expected generated asset: $path"
+        fi
+        return 1
+    fi
+    if [[ "$record_count" -ne 1 ]]; then
+        log_error "Duplicate expected generated asset record: $path"
+        return 1
+    fi
+    record="$(awk -F $'\t' -v path="$path" '$1 == path { print; exit }' "$records")"
+    IFS=$'\t' read -r _ record_source record_runtime record_kind record_identifier _ <<EOF
+$record
+EOF
+    if [[ "$record_source" != "$source" || "$record_runtime" != "$runtime" || "$record_kind" != "$kind" || "$record_identifier" != "$identifier" ]]; then
+        log_error "Generated asset record does not match expected registration: $path (expected: $runtime/$kind/$identifier from $source)"
+        return 1
+    fi
+}
+
+validate_generated_runtime_state() {
+    local manifest=".cyberpunk/generated.yml"
+    local validation_dir
+    local records
+    local runtime
+    local role
+    local index
+    local path
+    local source
+    local errors=0
+
+    if ! validate_generated_manifest "$manifest"; then
+        errors=$((errors + 1))
+    fi
+    if ! discover_canonical_skills; then
+        return 1
+    fi
+    if ! validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-expected-assets.XXXXXX")"; then
+        log_error "Cannot create generated asset validation directory"
+        return 1
+    fi
+    records="$validation_dir/records.tsv"
+    if ! load_generated_manifest_records "$manifest" "$records"; then
+        rm -f "$records" || true
+        rmdir "$validation_dir" 2>/dev/null || true
+        return 1
+    fi
+
+    while IFS= read -r runtime; do
+        [[ -n "$runtime" ]] || continue
+        for role in "${ROLE_IDS[@]}"; do
+            case "$runtime" in
+                codex) path=".codex/agents/$role.toml" ;;
+                claude) path=".claude/agents/$role.md" ;;
+                cursor) path=".cursor/agents/$role.md" ;;
+            esac
+            validate_expected_generated_asset "$records" "$path" "agents/$role.md" "$runtime" agent "$role" || errors=$((errors + 1))
+        done
+        for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+            source="${CANONICAL_SKILL_SOURCES[$index]}"
+            case "$runtime" in
+                codex) path=".agents/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+                claude) path=".claude/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+                cursor) path=".cursor/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+            esac
+            if validate_expected_generated_asset "$records" "$path" "$source" "$runtime" skill "${CANONICAL_SKILL_NAMES[$index]}"; then
+                [[ -f "$path" ]] && validate_native_skill_wrapper "$path" "${CANONICAL_SKILL_NAMES[$index]}" "${CANONICAL_SKILL_DESCRIPTION_YAMLS[$index]}" "$source" || errors=$((errors + 1))
+            else
+                errors=$((errors + 1))
+            fi
+        done
+        case "$runtime" in
+            codex)
+                [[ -f AGENTS.md ]] && validate_managed_instruction_block AGENTS.md || errors=$((errors + 1))
+                ;;
+            claude)
+                [[ -f CLAUDE.md ]] && validate_managed_instruction_block CLAUDE.md || errors=$((errors + 1))
+                ;;
+            cursor)
+                validate_expected_generated_asset "$records" ".cursor/rules/cyberpunk.mdc" ".cyberpunk/workflow.md" cursor adapter cyberpunk || errors=$((errors + 1))
+                ;;
+        esac
+    done < <(configured_runtimes .cyberpunk/config.yml)
+
+    rm -f "$records" || true
+    rmdir "$validation_dir" 2>/dev/null || true
+    [[ "$errors" -eq 0 ]]
+}
+
+validate_recorded_run_state() {
+    local state
+    local maximum
+    local execution_mode
+    local fallback_used
+    local job_records
+    local job
+    local parallel_safe
+    local scopes
+    local native_agent
+    local agent_instance
+    local review_agent_instance
+    local review_context
+    local review_status
+    local native_evidence=false
+    local parallel_claimed=false
+    local duplicate_scope
+    local errors=0
+
+    [[ -d .cyberpunk/runs ]] || return 0
+    while IFS= read -r state; do
+        native_evidence=false
+        maximum="$(sed -n 's/^max_concurrent_agents:[[:space:]]*//p' "$state" | head -n 1)"
+        if [[ -n "$maximum" && ( ! "$maximum" =~ ^[0-9]+$ || "$maximum" -lt 1 || "$maximum" -gt 3 ) ]]; then
+            log_error "Recorded run max_concurrent_agents must be an integer from 1 to 3: $state"
+            errors=$((errors + 1))
+        fi
+        execution_mode="$(sed -n 's/^execution_mode:[[:space:]]*//p' "$state" | head -n 1)"
+        fallback_used="$(awk '
+            $0 == "fallback:" { in_fallback=1; next }
+            in_fallback && /^[^[:space:]]/ { exit }
+            in_fallback && /^  used:[[:space:]]*/ {
+                value=$0
+                sub(/^  used:[[:space:]]*/, "", value)
+                print value
+                exit
+            }
+        ' "$state")"
+        if [[ "$execution_mode" == parallel ]] ||
+            grep -Eq '^[[:space:]]*(parallel_execution_claimed|parallel_delivery_claimed|delivery_parallel):[[:space:]]*true[[:space:]]*$' "$state"; then
+            parallel_claimed=true
+        else
+            parallel_claimed=false
+        fi
+
+        job_records="$(awk '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function unquote(value) {
+                value=trim(value)
+                if (value ~ /^".*"$/) {
+                    value=substr(value, 2, length(value) - 2)
+                }
+                return value
+            }
+            function append_scope(value,    item, count, index_value) {
+                value=trim(value)
+                sub(/^\[/, "", value)
+                sub(/\]$/, "", value)
+                count=split(value, items, /,/)
+                for (index_value=1; index_value<=count; index_value++) {
+                    item=unquote(items[index_value])
+                    if (item != "") {
+                        if (scopes != "") scopes=scopes ","
+                        scopes=scopes item
+                    }
+                }
+            }
+            function emit() {
+                if (job != "") print job "\t" parallel_safe "\t" scopes "\t" native_agent "\t" agent_instance "\t" review_agent_instance "\t" review_context "\t" review_status
+            }
+            $0 == "jobs:" { in_jobs=1; next }
+            in_jobs && /^[^[:space:]]/ { emit(); in_jobs=0; exit }
+            in_jobs && /^  [^[:space:]][^:]*:$/ {
+                emit()
+                job=$0
+                sub(/^  /, "", job)
+                sub(/:$/, "", job)
+                parallel_safe=scopes=native_agent=agent_instance=review_agent_instance=review_context=review_status=""
+                reading_scope=0
+                next
+            }
+            !in_jobs || job == "" { next }
+            reading_scope && /^      -[[:space:]]*/ {
+                value=$0
+                sub(/^      -[[:space:]]*/, "", value)
+                append_scope(value)
+                next
+            }
+            reading_scope { reading_scope=0 }
+            /^    allowed_scope:[[:space:]]*$/ { reading_scope=1; next }
+            /^    allowed_scope:[[:space:]]*\[/ {
+                value=$0
+                sub(/^    allowed_scope:[[:space:]]*/, "", value)
+                append_scope(value)
+                next
+            }
+            /^    parallel_safe:[[:space:]]*/ {
+                value=$0
+                sub(/^    parallel_safe:[[:space:]]*/, "", value)
+                parallel_safe=unquote(value)
+                next
+            }
+            /^    native_agent:[[:space:]]*/ {
+                value=$0
+                sub(/^    native_agent:[[:space:]]*/, "", value)
+                native_agent=unquote(value)
+                next
+            }
+            /^    agent_instance:[[:space:]]*/ {
+                value=$0
+                sub(/^    agent_instance:[[:space:]]*/, "", value)
+                agent_instance=unquote(value)
+                next
+            }
+            /^    review_agent_instance:[[:space:]]*/ {
+                value=$0
+                sub(/^    review_agent_instance:[[:space:]]*/, "", value)
+                review_agent_instance=unquote(value)
+                next
+            }
+            /^    review_context:[[:space:]]*/ {
+                value=$0
+                sub(/^    review_context:[[:space:]]*/, "", value)
+                review_context=unquote(value)
+                next
+            }
+            /^    review_status:[[:space:]]*/ {
+                value=$0
+                sub(/^    review_status:[[:space:]]*/, "", value)
+                review_status=unquote(value)
+            }
+            END { if (in_jobs) emit() }
+        ' "$state")"
+        scopes="$(printf '%s\n' "$job_records" | awk -F $'\t' '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
+        duplicate_scope="$(printf '%s\n' "$scopes" | awk -F $'\t' 'NF == 2 && seen[$2] != "" && seen[$2] != $1 { print $2; exit } { seen[$2]=$1 }')"
+        if [[ -n "$duplicate_scope" ]]; then
+            log_error "Recorded parallel-safe jobs overlap mutable scope: $duplicate_scope ($state)"
+            errors=$((errors + 1))
+        fi
+        while IFS=$'\t' read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status; do
+            [[ -n "$job" ]] || continue
+            if [[ "$native_agent" != "" && "$native_agent" != null ]]; then
+                native_evidence=true
+            fi
+            if [[ "$review_status" == approved && "$fallback_used" != true &&
+                ( "$review_agent_instance" == "" || "$review_agent_instance" == null || "$review_context" != fresh ) ]]; then
+                log_error "Approved native review lacks fresh reviewer identity/context: $state (job: $job)"
+                errors=$((errors + 1))
+            fi
+        done <<EOF
+$job_records
+EOF
+        if [[ "$parallel_claimed" == true && "$native_evidence" != true ]]; then
+            log_error "Recorded parallel execution/delivery claim lacks native agent evidence: $state"
+            errors=$((errors + 1))
+        fi
+    done < <(find .cyberpunk/runs -mindepth 2 -maxdepth 2 -type f \( -name state.yml -o -name run.yml \) | LC_ALL=C sort)
+    [[ "$errors" -eq 0 ]]
+}
+
 validate_project() {
     local error_count=0
     local path
@@ -963,7 +1278,16 @@ validate_project() {
                 error_count=$((error_count + 1))
             fi
         done
+        if ! validate_runtime_configuration ".cyberpunk/config.yml"; then
+            error_count=$((error_count + 1))
+        fi
         if ! validate_model_configuration ".cyberpunk/config.yml"; then
+            error_count=$((error_count + 1))
+        fi
+        if ! validate_generated_runtime_state; then
+            error_count=$((error_count + 1))
+        fi
+        if ! validate_recorded_run_state; then
             error_count=$((error_count + 1))
         fi
     fi
@@ -1004,6 +1328,18 @@ status_project() {
     local project_skill_count=0
     local run_count=0
     local discovery="unavailable"
+    local configured="unknown"
+    local parallelism="unknown"
+    local maximum="unknown"
+    local fallback="unknown"
+    local generated_assets="unknown"
+    local codex_agents=0
+    local claude_agents=0
+    local cursor_agents=0
+    local codex_skills=0
+    local claude_skills=0
+    local cursor_skills=0
+    local runtime
 
     if [[ -f ".cyberpunk/workflow.md" && -f "agents/nexus.md" ]]; then
         status="initialized"
@@ -1021,8 +1357,48 @@ status_project() {
         discovery="$(sed -n 's/^\*\*Discovery status:\*\* //p' .cyberpunk/project.md | head -n 1)"
         [[ -n "$discovery" ]] || discovery="unknown"
     fi
+    if [[ -f ".cyberpunk/config.yml" ]]; then
+        if validate_runtime_configuration .cyberpunk/config.yml >/dev/null 2>&1 &&
+            validate_model_configuration .cyberpunk/config.yml >/dev/null 2>&1; then
+            while IFS= read -r runtime; do
+                [[ -n "$runtime" ]] || continue
+                if [[ -n "$configured" && "$configured" != unknown ]]; then
+                    configured="$configured, $runtime"
+                else
+                    configured="$runtime"
+                fi
+            done < <(configured_runtimes .cyberpunk/config.yml)
+            [[ -n "$configured" ]] || configured="unknown"
+            parallelism="$(execution_setting .cyberpunk/config.yml parallelism)"
+            [[ -n "$parallelism" ]] || parallelism="unknown"
+            maximum="$(execution_setting .cyberpunk/config.yml max_concurrent_agents)"
+            [[ -n "$maximum" ]] || maximum="unknown"
+            fallback="$(model_fallback .cyberpunk/config.yml)"
+            [[ -n "$fallback" ]] || fallback="unknown"
+        fi
+        if validate_runtime_configuration .cyberpunk/config.yml >/dev/null 2>&1 &&
+            validate_model_configuration .cyberpunk/config.yml >/dev/null 2>&1 &&
+            validate_generated_runtime_state >/dev/null 2>&1; then
+            generated_assets="synchronized"
+        else
+            generated_assets="drift detected"
+        fi
+    fi
+    codex_agents="$(count_files .codex/agents '*.toml')"
+    claude_agents="$(count_files .claude/agents '*.md')"
+    cursor_agents="$(count_files .cursor/agents '*.md')"
+    codex_skills="$(count_files .agents/skills 'SKILL.md')"
+    claude_skills="$(count_files .claude/skills 'SKILL.md')"
+    cursor_skills="$(count_files .cursor/skills 'SKILL.md')"
 
     echo "Status: $status"
+    echo "Configured runtimes: $configured"
+    echo "Parallelism: $parallelism"
+    echo "Maximum concurrent subagents: $maximum"
+    echo "Model fallback: $fallback"
+    echo "Native agents: codex=$codex_agents claude=$claude_agents cursor=$cursor_agents"
+    echo "Native skills: codex=$codex_skills claude=$claude_skills cursor=$cursor_skills"
+    echo "Generated assets: $generated_assets"
     echo "Project discovery: $discovery"
     echo "Agents: $agent_count"
     echo "Core skills: $core_skill_count"

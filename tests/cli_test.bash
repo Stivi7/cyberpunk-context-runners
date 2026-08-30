@@ -137,6 +137,42 @@ assert_contains "$COMMAND_OUTPUT" "Status: initialized"
 assert_contains "$COMMAND_OUTPUT" "Agents: 11"
 assert_contains "$COMMAND_OUTPUT" "Core skills: 16"
 
+test_start "validate and status inspect generated runtime registrations without writing"
+runtime_validation_project="$SANDBOX_ROOT/runtime-validation"
+mkdir -p "$runtime_validation_project"
+assert_exit 0 run_cli "$runtime_validation_project" init
+runtime_validation_config="$runtime_validation_project/.cyberpunk/config.yml"
+cp "$runtime_validation_config" "$runtime_validation_project/config.healthy.yml"
+assert_exit 0 run_cli "$runtime_validation_project" validate
+assert_exit 0 run_cli "$runtime_validation_project" status
+assert_contains "$COMMAND_OUTPUT" "Configured runtimes: codex, claude, cursor"
+assert_contains "$COMMAND_OUTPUT" "Parallelism: auto"
+assert_contains "$COMMAND_OUTPUT" "Maximum concurrent subagents: 3"
+assert_contains "$COMMAND_OUTPUT" "Model fallback: inherit"
+assert_contains "$COMMAND_OUTPUT" "Native agents: codex=11 claude=11 cursor=11"
+assert_contains "$COMMAND_OUTPUT" "Native skills: codex=16 claude=16 cursor=16"
+assert_contains "$COMMAND_OUTPUT" "Generated assets: synchronized"
+
+status_before="$(cksum "$runtime_validation_project/.cyberpunk/generated.yml")"
+assert_exit 0 run_cli "$runtime_validation_project" status
+assert_eq "$status_before" "$(cksum "$runtime_validation_project/.cyberpunk/generated.yml")" "status changed generated state"
+
+sed 's/max_concurrent_agents: 3/max_concurrent_agents: 4/' \
+    "$runtime_validation_config" > "$runtime_validation_config.tmp"
+mv "$runtime_validation_config.tmp" "$runtime_validation_config"
+capture run_cli "$runtime_validation_project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "max_concurrent_agents must be an integer from 1 to 3"
+
+cp "$runtime_validation_project/config.healthy.yml" "$runtime_validation_config"
+rm "$runtime_validation_project/.codex/agents/nexus.toml"
+capture run_cli "$runtime_validation_project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Missing expected generated asset: .codex/agents/nexus.toml"
+
+assert_exit 0 run_cli "$runtime_validation_project" status
+assert_contains "$COMMAND_OUTPUT" "Generated assets: drift detected"
+
 test_start "version is updated"
 assert_exit 0 "$CYBERPUNK_BIN" --version
 assert_contains "$COMMAND_OUTPUT" "0.3.0"

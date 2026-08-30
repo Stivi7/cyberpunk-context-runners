@@ -814,6 +814,7 @@ install_staged_generated_assets() {
     local staged_content
     local expected_state
     local expected_hash
+    local expected_path
     local actual_hash
     local existed
     local backup
@@ -1463,6 +1464,12 @@ validate_generated_manifest() {
         rmdir "$validation_dir" 2>/dev/null || true
         return 1
     fi
+    if ! awk -F '\t' '!/^[[:space:]]*$/ && seen[$3 SUBSEP $4 SUBSEP $5]++ { exit 1 }' "$records"; then
+        printf 'Duplicate generated asset runtime/kind/identifier tuple in manifest: %s\n' "$manifest_path" >&2
+        rm -f "$records" || true
+        rmdir "$validation_dir" 2>/dev/null || true
+        return 1
+    fi
     if ! project_root="$(cd "$(dirname "$manifest_path")/.." && pwd)"; then
         rm -f "$records" || true
         rmdir "$validation_dir" 2>/dev/null || true
@@ -1471,6 +1478,42 @@ validate_generated_manifest() {
 
     while IFS=$'\t' read -r path source runtime kind identifier expected_hash; do
         [[ -n "$path" ]] || continue
+        case "$runtime:$kind" in
+            codex:agent)
+                expected_path=".codex/agents/$identifier.toml"
+                ;;
+            claude:agent)
+                expected_path=".claude/agents/$identifier.md"
+                ;;
+            cursor:agent)
+                expected_path=".cursor/agents/$identifier.md"
+                ;;
+            codex:skill)
+                expected_path=".agents/skills/$identifier/SKILL.md"
+                ;;
+            claude:skill)
+                expected_path=".claude/skills/$identifier/SKILL.md"
+                ;;
+            cursor:skill)
+                expected_path=".cursor/skills/$identifier/SKILL.md"
+                ;;
+            cursor:adapter)
+                expected_path=".cursor/rules/$identifier.mdc"
+                ;;
+            *)
+                printf 'Invalid generated asset runtime/kind: %s (%s/%s)\n' "$path" "$runtime" "$kind" >&2
+                failures=$((failures + 1))
+                expected_path=""
+                ;;
+        esac
+        if [[ -n "$expected_path" && "$path" != "$expected_path" ]]; then
+            printf 'Generated asset path does not match runtime/kind/identifier: %s (expected: %s)\n' "$path" "$expected_path" >&2
+            failures=$((failures + 1))
+        fi
+        if [[ ! -f "$project_root/$source" || -L "$project_root/$source" ]]; then
+            printf 'Missing canonical source for generated asset: %s (source: %s)\n' "$path" "$source" >&2
+            failures=$((failures + 1))
+        fi
         if [[ ! "$expected_hash" =~ ^[0-9a-f]{64}$ ]]; then
             printf 'Invalid generated asset SHA-256: %s\n' "$path" >&2
             failures=$((failures + 1))
