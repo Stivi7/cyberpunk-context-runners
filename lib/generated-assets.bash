@@ -6,6 +6,8 @@ GENERATED_MANIFEST_RECORDS=""
 GENERATED_MANIFEST_WORKDIR=""
 GENERATED_STAGED_ASSETS=""
 GENERATED_STAGED_SORTED=""
+GENERATED_RETIRED_ASSETS=""
+GENERATED_RETIRED_SORTED=""
 GENERATED_ROLLBACK_LOG=""
 GENERATED_TRANSACTION_COMMITTED=false
 GENERATED_MANIFEST_FAILED=false
@@ -284,6 +286,8 @@ cleanup_generated_manifest() {
             "$GENERATED_MANIFEST_WORKDIR/records.sorted.tsv" \
             "$GENERATED_MANIFEST_WORKDIR/staged.tsv" \
             "$GENERATED_MANIFEST_WORKDIR/staged.sorted.tsv" \
+            "$GENERATED_MANIFEST_WORKDIR/retired.tsv" \
+            "$GENERATED_MANIFEST_WORKDIR/retired.sorted.tsv" \
             "$GENERATED_MANIFEST_WORKDIR/rollback.tsv" \
             "$GENERATED_MANIFEST_WORKDIR/cursor.mdc" || cleanup_status=1
         rmdir "$GENERATED_MANIFEST_WORKDIR" 2>/dev/null || cleanup_status=1
@@ -294,6 +298,8 @@ cleanup_generated_manifest() {
     GENERATED_MANIFEST_WORKDIR=""
     GENERATED_STAGED_ASSETS=""
     GENERATED_STAGED_SORTED=""
+    GENERATED_RETIRED_ASSETS=""
+    GENERATED_RETIRED_SORTED=""
     GENERATED_ROLLBACK_LOG=""
     GENERATED_TRANSACTION_COMMITTED=false
     GENERATED_MANIFEST_FAILED=false
@@ -328,6 +334,8 @@ begin_generated_manifest() {
     GENERATED_MANIFEST_RECORDS="$GENERATED_MANIFEST_WORKDIR/records.tsv"
     GENERATED_STAGED_ASSETS="$GENERATED_MANIFEST_WORKDIR/staged.tsv"
     GENERATED_STAGED_SORTED="$GENERATED_MANIFEST_WORKDIR/staged.sorted.tsv"
+    GENERATED_RETIRED_ASSETS="$GENERATED_MANIFEST_WORKDIR/retired.tsv"
+    GENERATED_RETIRED_SORTED="$GENERATED_MANIFEST_WORKDIR/retired.sorted.tsv"
     GENERATED_ROLLBACK_LOG="$GENERATED_MANIFEST_WORKDIR/rollback.tsv"
     GENERATED_TRANSACTION_COMMITTED=false
     if ! : > "$GENERATED_MANIFEST_INDEX"; then
@@ -339,6 +347,10 @@ begin_generated_manifest() {
         return 1
     fi
     if ! : > "$GENERATED_STAGED_ASSETS"; then
+        cleanup_generated_manifest
+        return 1
+    fi
+    if ! : > "$GENERATED_RETIRED_ASSETS"; then
         cleanup_generated_manifest
         return 1
     fi
@@ -421,6 +433,88 @@ record_generated_asset() {
         return 1
     fi
     GENERATED_ACTIVE_TEMP=""
+}
+
+remove_generated_asset_record() {
+    local path="$1"
+    local updated
+    local record_path
+    local record_source
+    local record_runtime
+    local record_kind
+    local record_identifier
+    local record_hash
+
+    if ! updated="$(mktemp "$GENERATED_MANIFEST_WORKDIR/records.updated.XXXXXX")"; then
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP="$updated"
+    while IFS=$'\t' read -r record_path record_source record_runtime record_kind record_identifier record_hash; do
+        [[ "$record_path" == "$path" ]] && continue
+        if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$record_path" "$record_source" "$record_runtime" "$record_kind" "$record_identifier" "$record_hash" \
+            >> "$updated"; then
+            discard_temp_file "$updated" || true
+            return 1
+        fi
+    done < "$GENERATED_MANIFEST_RECORDS"
+    if ! mv "$updated" "$GENERATED_MANIFEST_RECORDS"; then
+        discard_temp_file "$updated" || true
+        return 1
+    fi
+    GENERATED_ACTIVE_TEMP=""
+}
+
+retire_generated_asset() {
+    local destination="$1"
+    local relative_path="${destination#./}"
+    local prior_record
+    local prior_path
+    local prior_source
+    local prior_runtime
+    local prior_kind
+    local prior_identifier
+    local prior_hash
+    local actual_hash
+
+    if [[ -z "$GENERATED_MANIFEST_PATH" ]]; then
+        printf 'Generated asset manifest has not been started\n' >&2
+        return 1
+    fi
+    if ! validate_generated_manifest_field path "$relative_path"; then
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
+    if ! prior_record="$(find_generated_record "$relative_path" "$GENERATED_MANIFEST_INDEX")"; then
+        return 0
+    fi
+    IFS=$'\t' read -r prior_path prior_source prior_runtime prior_kind prior_identifier prior_hash <<EOF
+$prior_record
+EOF
+    if generated_path_exists "$relative_path" && [[ ! -f "$relative_path" || -L "$relative_path" ]]; then
+        printf 'Generated asset collision: %s is not a regular Cyberpunk-owned file\n' "$relative_path" >&2
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
+    if [[ -f "$relative_path" ]]; then
+        actual_hash="$(sha256_file "$relative_path")" || {
+            GENERATED_MANIFEST_FAILED=true
+            return 1
+        }
+        if [[ "$actual_hash" != "$prior_hash" && "${FORCE:-false}" != true ]]; then
+            printf 'Generated asset drift: %s was modified locally; rerun with --force to replace it\n' "$relative_path" >&2
+            GENERATED_MANIFEST_FAILED=true
+            return 1
+        fi
+        if ! printf '%s\t%s\n' "$relative_path" "$actual_hash" >> "$GENERATED_RETIRED_ASSETS"; then
+            GENERATED_MANIFEST_FAILED=true
+            return 1
+        fi
+    fi
+    if ! remove_generated_asset_record "$relative_path"; then
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
 }
 
 replace_generated_file() {
@@ -855,6 +949,77 @@ install_staged_generated_assets() {
     done < "$GENERATED_STAGED_SORTED"
 }
 
+retire_staged_generated_assets() {
+    local destination
+    local expected_hash
+    local actual_hash
+    local backup
+    local backup_dir
+    local claimed_marker
+    local destination_dir
+    local destination_display_dir
+    local destination_name
+
+    [[ -s "$GENERATED_RETIRED_ASSETS" ]] || return 0
+    if ! LC_ALL=C sort -t $'\t' -k1,1 "$GENERATED_RETIRED_ASSETS" > "$GENERATED_RETIRED_SORTED"; then
+        return 1
+    fi
+    while IFS=$'\t' read -r destination expected_hash; do
+        [[ -n "$destination" && -n "$expected_hash" ]] || continue
+        if [[ ! -f "$destination" || -L "$destination" ]]; then
+            printf 'Generated asset drift after staging: %s changed type or disappeared\n' "$destination" >&2
+            return 1
+        fi
+        if ! actual_hash="$(sha256_file "$destination")"; then
+            return 1
+        fi
+        if [[ "$actual_hash" != "$expected_hash" ]]; then
+            printf 'Generated asset drift after staging: %s changed concurrently\n' "$destination" >&2
+            return 1
+        fi
+
+        destination_display_dir="$(dirname "$destination")"
+        destination_dir="$(cd "$destination_display_dir" && pwd -P)"
+        destination_name="$(basename "$destination")"
+        if ! backup_dir="$(mktemp -d "$destination_dir/.$destination_name.rollback.XXXXXX")"; then
+            printf 'Cannot create generated rollback directory for: %s\n' "$destination" >&2
+            return 1
+        fi
+        backup="$backup_dir/original"
+        claimed_marker="$backup_dir/claimed"
+
+        mask_generated_commit_signals
+        if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$destination" true "$backup" - "$backup_dir" "$claimed_marker" - "$expected_hash" \
+            >> "$GENERATED_ROLLBACK_LOG"; then
+            resume_generated_transaction_signals
+            rmdir "$backup_dir" 2>/dev/null || true
+            return 1
+        fi
+        if ! mv "$destination" "$backup"; then
+            resume_generated_transaction_signals
+            return 1
+        fi
+        if ! : > "$claimed_marker"; then
+            resume_generated_transaction_signals
+            return 1
+        fi
+        resume_generated_transaction_signals
+
+        if [[ ! -f "$backup" || -L "$backup" ]]; then
+            printf 'Generated asset changed type during atomic retirement: %s\n' "$destination" >&2
+            return 1
+        fi
+        if ! actual_hash="$(sha256_file "$backup")"; then
+            return 1
+        fi
+        if [[ "$actual_hash" != "$expected_hash" ]]; then
+            printf 'Generated asset changed during atomic retirement: %s\n' "$destination" >&2
+            return 1
+        fi
+    done < "$GENERATED_RETIRED_SORTED"
+}
+
 abort_generated_manifest_transaction() {
     local abort_status=0
 
@@ -886,6 +1051,8 @@ preserve_generated_recovery_workspace() {
     GENERATED_MANIFEST_WORKDIR=""
     GENERATED_STAGED_ASSETS=""
     GENERATED_STAGED_SORTED=""
+    GENERATED_RETIRED_ASSETS=""
+    GENERATED_RETIRED_SORTED=""
     GENERATED_ROLLBACK_LOG=""
     GENERATED_TRANSACTION_COMMITTED=false
     GENERATED_MANIFEST_FAILED=false
@@ -960,6 +1127,12 @@ finish_generated_manifest() {
         return 1
     fi
     if ! install_staged_generated_assets; then
+        if ! rollback_failed_generated_transaction; then
+            : # Detailed rollback errors were already emitted.
+        fi
+        return 1
+    fi
+    if ! retire_staged_generated_assets; then
         if ! rollback_failed_generated_transaction; then
             : # Detailed rollback errors were already emitted.
         fi
