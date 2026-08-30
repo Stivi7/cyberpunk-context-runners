@@ -17,9 +17,11 @@ run_cli() {
 test_start "status reports synchronized native registrations without claiming live capability"
 project="$SANDBOX_ROOT/healthy"
 mkdir -p "$project"
+git -C "$project" init -q
 assert_exit 0 run_cli "$project" init
 assert_exit 0 run_cli "$project" validate
 before="$(cksum "$project/.cyberpunk/generated.yml")"
+git_before="$(git -C "$project" status --porcelain)"
 assert_exit 0 run_cli "$project" status
 assert_contains "$COMMAND_OUTPUT" "Configured runtimes: codex, claude, cursor"
 assert_contains "$COMMAND_OUTPUT" "Parallelism: auto"
@@ -30,6 +32,47 @@ assert_contains "$COMMAND_OUTPUT" "Native skills: codex=16 claude=16 cursor=16"
 assert_contains "$COMMAND_OUTPUT" "Generated assets: synchronized"
 assert_not_contains "$COMMAND_OUTPUT" "parallel agents available"
 assert_eq "$before" "$(cksum "$project/.cyberpunk/generated.yml")" "status changed generated state"
+assert_eq "$git_before" "$(git -C "$project" status --porcelain)" "status changed the project"
+
+test_start "validation rejects exact managed-block and skill-wrapper corruption without writing"
+sed "s/and use the active runtime's native Cyberpunk agents and skills\. Dispatch/and use drifted native Cyberpunk agents and skills. Dispatch/" \
+    "$project/AGENTS.md" > "$project/managed.tmp"
+mv "$project/managed.tmp" "$project/AGENTS.md"
+managed_before="$(cksum "$project/AGENTS.md")"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Managed instruction block differs from canonical content: AGENTS.md"
+assert_eq "$managed_before" "$(cksum "$project/AGENTS.md")" "validate rewrote managed content"
+assert_eq "$git_before" "$(git -C "$project" status --porcelain)" "validate changed the project"
+assert_exit 0 run_cli "$project" sync --force
+
+sed 's|../../../skills/core/task-decomposition/SKILL.md|../../../skills/core/missing/SKILL.md|' \
+    "$project/.agents/skills/task-decomposition/SKILL.md" > "$project/wrapper.tmp"
+mv "$project/wrapper.tmp" "$project/.agents/skills/task-decomposition/SKILL.md"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Native skill wrapper differs from canonical registration"
+assert_exit 0 run_cli "$project" sync --force
+
+cp "$project/.cyberpunk/generated.yml" "$project/manifest.healthy.yml"
+awk '
+    $0 == "  - path: \".codex/agents/nexus.toml\"" { skip=6 }
+    skip > 0 { skip--; next }
+    { print }
+' "$project/.cyberpunk/generated.yml" > "$project/manifest.tmp"
+mv "$project/manifest.tmp" "$project/.cyberpunk/generated.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Native identifier collision at expected path without manifest record: .codex/agents/nexus.toml"
+cp "$project/manifest.healthy.yml" "$project/.cyberpunk/generated.yml"
+
+test_start "validation rejects duplicate fixed-schema configuration fields"
+cp "$project/.cyberpunk/config.yml" "$project/config.fixed.yml"
+printf '%s\n' 'execution:' '  max_concurrent_agents: 3' >> "$project/.cyberpunk/config.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Configuration section must appear exactly once: execution"
+cp "$project/config.fixed.yml" "$project/.cyberpunk/config.yml"
 
 test_start "validation rejects invalid concurrency and missing expected native agent"
 cp "$project/.cyberpunk/config.yml" "$project/config.healthy.yml"
@@ -137,6 +180,63 @@ capture run_cli "$project" validate
 assert_eq 1 "$COMMAND_STATUS"
 assert_contains "$COMMAND_OUTPUT" "Approved native review lacks fresh reviewer identity/context"
 rm -rf "$project/.cyberpunk/runs/missing-reviewer"
+
+write_run_state same-reviewer <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  frontend:
+    native_agent: neon
+    agent_instance: codex-agent-worker
+    parallel_safe: true
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: codex-agent-worker
+    review_context: fresh
+    review_status: approved
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Approved native review lacks fresh reviewer identity/context"
+rm -rf "$project/.cyberpunk/runs/same-reviewer"
+
+write_run_state glob-overlap <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  broad:
+    native_agent: neon
+    agent_instance: agent-one
+    parallel_safe: true
+    allowed_scope: [src/**]
+    review_agent_instance: review-one
+    review_context: fresh
+    review_status: approved
+  narrow:
+    native_agent: daemon
+    agent_instance: agent-two
+    parallel_safe: true
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: review-two
+    review_context: fresh
+    review_status: approved
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Recorded parallel-safe jobs overlap mutable scope: src/** and src/frontend/**"
+rm -rf "$project/.cyberpunk/runs/glob-overlap"
+
+mkdir -p "$project/.cyberpunk/runs/empty"
+: > "$project/.cyberpunk/runs/empty/state.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Recorded run state is empty"
+rm -rf "$project/.cyberpunk/runs/empty"
 
 write_run_state unsupported-parallel-claim <<'EOF'
 runtime: codex

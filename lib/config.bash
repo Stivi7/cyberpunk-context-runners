@@ -410,6 +410,27 @@ validate_runtime_configuration() {
     local parallelism
     local errors=0
     local seen=" "
+    local section
+    local key
+
+    for section in runtimes execution models; do
+        if [[ "$(grep -Fxc "${section}:" "$config_path")" -ne 1 ]]; then
+            printf 'Configuration section must appear exactly once: %s\n' "$section" >&2
+            errors=$((errors + 1))
+        fi
+    done
+    for key in enabled; do
+        if [[ "$(awk '$0 == "runtimes:" { section++ } section == 1 && /^  enabled:[[:space:]]*/ { count++ } END { print count + 0 }' "$config_path")" -ne 1 ]]; then
+            printf 'Configuration key must appear exactly once: runtimes.%s\n' "$key" >&2
+            errors=$((errors + 1))
+        fi
+    done
+    for key in parallelism max_concurrent_agents unavailable_runtime_fallback; do
+        if [[ "$(awk -v key="$key" '$0 == "execution:" { section++ } section == 1 && $0 ~ "^  " key ":[[:space:]]*" { count++ } END { print count + 0 }' "$config_path")" -ne 1 ]]; then
+            printf 'Configuration key must appear exactly once: execution.%s\n' "$key" >&2
+            errors=$((errors + 1))
+        fi
+    done
 
     while IFS= read -r runtime; do
         [[ -n "$runtime" ]] || continue
@@ -455,8 +476,18 @@ validate_model_configuration() {
     local override_profile
     local model
     local fallback
+    local field
+    local role_count
+    local unknown_roles
     local error_count=0
     local profiles=(deep balanced fast)
+
+    for field in fallback profiles roles overrides; do
+        if [[ "$(awk -v field="$field" '$0 == "models:" { section++ } section == 1 && $0 ~ "^  " field ":[[:space:]]*" { count++ } END { print count + 0 }' "$config_path")" -ne 1 ]]; then
+            printf 'Configuration key must appear exactly once: models.%s\n' "$field" >&2
+            error_count=$((error_count + 1))
+        fi
+    done
 
     fallback="$(model_fallback "$config_path")"
     if [[ "$fallback" != inherit ]]; then
@@ -503,7 +534,35 @@ validate_model_configuration() {
         fi
     done
 
+    unknown_roles="$(awk '
+        $0 == "models:" { in_models=1; next }
+        in_models && /^[^[:space:]]/ { exit }
+        in_models && $0 == "  roles:" { in_roles=1; next }
+        in_roles && /^  [^[:space:]][^:]*:/ { exit }
+        in_roles && /^    [^[:space:]][^:]*:/ { value=$0; sub(/^    /, "", value); sub(/:.*/, "", value); print value }
+    ' "$config_path")"
+    while IFS= read -r role; do
+        [[ -n "$role" ]] || continue
+        case " ${ROLE_IDS[*]} " in
+            *" $role "*) ;;
+            *) printf 'Unknown model role: %s\n' "$role" >&2; error_count=$((error_count + 1)) ;;
+        esac
+    done <<EOF
+$unknown_roles
+EOF
+
     for profile in "${profiles[@]}"; do
+        if [[ "$(awk -v profile="$profile" '
+            $0 == "models:" { in_models=1; next }
+            in_models && /^[^[:space:]]/ { exit }
+            in_models && $0 == "  profiles:" { in_profiles=1; next }
+            in_profiles && /^  [^[:space:]][^:]*:/ { exit }
+            in_profiles && $0 ~ "^    " profile ":[[:space:]]*" { count++ }
+            END { print count + 0 }
+        ' "$config_path")" -ne 1 ]]; then
+            printf 'Model profile must appear exactly once: %s\n' "$profile" >&2
+            error_count=$((error_count + 1))
+        fi
         while IFS= read -r runtime; do
             [[ -n "$runtime" ]] || continue
             model="$(profile_model "$config_path" "$profile" "$runtime")"
