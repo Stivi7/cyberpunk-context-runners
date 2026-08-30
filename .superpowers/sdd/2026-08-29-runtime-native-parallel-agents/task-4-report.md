@@ -301,3 +301,86 @@ and aggregate suites were not rerun.
 
 The existing local long-suite cutoff remains the only concern; it is unchanged
 and was intentionally not retried for this focused parser correction.
+
+## Fix Round 4
+
+### Finding addressed
+
+The former post-parse `[[:cntrl:]]` check was not a safe input boundary. Its
+classification is locale-dependent, and Bash `read` cannot retain a NUL in a
+line variable. A NUL or malformed byte outside the two fields the parser
+consumes could therefore be ignored before the wrapper writer ran. The prior
+name/value arrays also had different lengths, so their loop did not exercise
+`0x1F`; they omitted DEL and valid UTF-8 representations of the C1 range.
+
+Canonical `SKILL.md` files now receive a locale-independent byte preflight
+before frontmatter is read. It decodes UTF-8 from `od`'s numeric byte stream
+and accepts YAML 1.2 `c-printable`: TAB, LF, CR, printable ASCII, U+0085,
+U+00A0--U+D7FF, U+E000--U+FFFD, and U+10000--U+10FFFF. It rejects the other
+C0 controls, DEL, C1 except U+0085, invalid/overlong/truncated UTF-8,
+surrogates, U+FFFE, and U+FFFF. The line parser now uses explicit ASCII space
+and TAB handling rather than locale character classes and accepts CRLF input.
+
+### RED evidence
+
+With the focused byte regression added but before production changes, running
+it against `46abe3e` failed as expected:
+
+```text
+TEST: canonical skill byte validation is locale-independent and follows YAML c-printable
+FAIL: C rejected YAML-prohibited C0 byte 0x00 (expected '1', got '0')
+```
+
+The raw NUL fixture followed otherwise valid canonical frontmatter and the old
+`sync` wrote a wrapper, proving the validation had happened too late.
+
+### GREEN and verification evidence
+
+The focused regression now passes in 17.6 seconds:
+
+```text
+TEST: sync rejects raw NUL, DEL, and prohibited C1 bytes before creating a wrapper
+TEST: canonical skill byte validation is locale-independent and follows YAML c-printable
+TEST: YAML-permitted UTF-8 metadata and CRLF frontmatter remain discoverable
+PASS: runtime skill metadata byte tests
+```
+
+- The real CLI contract verifies that NUL, DEL, and U+0080 reject `sync`
+  before the project-skill wrapper exists.
+- Deterministic fixtures run under both `LC_ALL=C` and `LC_ALL=C.UTF-8`.
+  They exhaustively cover all 30 YAML-prohibited ASCII bytes (including
+  `0x1F` and DEL), all 31 prohibited C1 code points while preserving U+0085,
+  malformed UTF-8, overlong forms, surrogates, U+FFFE/U+FFFF, and accepted
+  TAB, NEL, non-breaking space, supplementary-plane UTF-8, and CRLF input.
+- `bash -n cyberpunk`, `bash -n tests/runtime_adapter_test.bash`, and
+  `bash -n tests/runtime_skill_metadata_byte_test.bash` passed.
+- `bash tests/skill_contract_test.bash` passed (`PASS: skill contract tests`).
+- `git diff --check` passed.
+
+### Self-review
+
+- The byte decoder has no locale-sensitive character classes: it consumes only
+  decimal output from `LC_ALL=C od`, validates continuation structure and
+  scalar range before any frontmatter bytes enter Bash variables, and makes no
+  attempt to treat isolated C1 bytes as UTF-8 characters.
+- The generated wrapper still receives only validated UTF-8 text. The NEL
+  exception is specifically retained because YAML permits U+0085; the test
+  exercises it separately from the rejected C1 loop.
+- The incomplete parallel-array regression was removed from the long runtime
+  adapter suite and replaced by the focused, independently runnable test file
+  that the aggregate runner will discover by name.
+- Mutating the preflight call, the DEL/C1 exclusions, or the U+0085 exception
+  makes the focused integration or byte-table assertions fail.
+
+### Fix Round 4 files changed
+
+- `cyberpunk`
+- `tests/runtime_adapter_test.bash`
+- `tests/runtime_skill_metadata_byte_test.bash`
+- `.superpowers/sdd/2026-08-29-runtime-native-parallel-agents/task-4-report.md`
+
+### Fix Round 4 concern
+
+Per the narrow-scope instruction, the known long-cutoff runtime, integration,
+and aggregate suites were not rerun. The focused byte regression and skill
+contract both have fresh, complete passing exit-status evidence.

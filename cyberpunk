@@ -391,6 +391,75 @@ CANONICAL_SKILL_DESCRIPTION_YAMLS=("")
 CANONICAL_SKILL_SOURCES=("")
 CANONICAL_SKILL_COUNT=0
 
+validate_yaml_printable_utf8_file() {
+    local path="$1"
+    local byte_stream
+    local raw_byte
+    local byte=0
+    local codepoint=0
+    local minimum_codepoint=0
+    local continuation_count=0
+    local IFS=$' \t\n'
+
+    byte_stream="$(LC_ALL=C od -An -v -tu1 "$path")" || return 1
+    for raw_byte in $byte_stream; do
+        [[ "$raw_byte" =~ ^[0-9]+$ ]] || return 1
+        byte=$((10#$raw_byte))
+        ((byte <= 255)) || return 1
+
+        if ((continuation_count == 0)); then
+            if ((byte <= 0x7f)); then
+                if ((byte < 0x20)); then
+                    case "$byte" in
+                        9|10|13) ;;
+                        *) return 1 ;;
+                    esac
+                elif ((byte == 0x7f)); then
+                    return 1
+                fi
+                continue
+            fi
+
+            if ((byte >= 0xc2 && byte <= 0xdf)); then
+                codepoint=$((byte & 0x1f))
+                minimum_codepoint=0x80
+                continuation_count=1
+            elif ((byte >= 0xe0 && byte <= 0xef)); then
+                codepoint=$((byte & 0x0f))
+                minimum_codepoint=0x800
+                continuation_count=2
+            elif ((byte >= 0xf0 && byte <= 0xf4)); then
+                codepoint=$((byte & 0x07))
+                minimum_codepoint=0x10000
+                continuation_count=3
+            else
+                return 1
+            fi
+            continue
+        fi
+
+        ((byte >= 0x80 && byte <= 0xbf)) || return 1
+        codepoint=$(((codepoint << 6) | (byte & 0x3f)))
+        continuation_count=$((continuation_count - 1))
+        if ((continuation_count != 0)); then
+            continue
+        fi
+
+        if ((
+            codepoint < minimum_codepoint ||
+            codepoint > 0x10ffff ||
+            (codepoint >= 0xd800 && codepoint <= 0xdfff) ||
+            codepoint == 0xfffe ||
+            codepoint == 0xffff ||
+            (codepoint >= 0x80 && codepoint <= 0x9f && codepoint != 0x85)
+        )); then
+            return 1
+        fi
+    done
+
+    ((continuation_count == 0))
+}
+
 parse_canonical_skill_string() {
     local field="$1"
     local line="$2"
@@ -403,11 +472,25 @@ parse_canonical_skill_string() {
     local plain_string_pattern='^[A-Za-z][A-Za-z0-9 .,;()/_+-]*$'
 
     value="${line#"$field:"}"
-    if [[ "$value" != [[:space:]]* ]]; then
+    case "$value" in
+        ' '*|$'\t'*) ;;
+        *) return 1 ;;
+    esac
+    while [[ "$value" == ' '* || "$value" == $'\t'* ]]; do
+        case "$value" in
+            ' '*) value="${value# }" ;;
+            $'\t'*) value="${value#$'\t'}" ;;
+        esac
+    done
+    while [[ "$value" == *' ' || "$value" == *$'\t' ]]; do
+        case "$value" in
+            *' ') value="${value% }" ;;
+            *$'\t') value="${value%$'\t'}" ;;
+        esac
+    done
+    if [[ -z "$value" ]]; then
         return 1
     fi
-    value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-    [[ -n "$value" ]] || return 1
 
     case "$value" in
         \"*)
@@ -461,7 +544,6 @@ parse_canonical_skill_string() {
             ;;
     esac
 
-    [[ "$decoded" != *[[:cntrl:]]* ]] || return 1
     CANONICAL_SKILL_STRING="$decoded"
     CANONICAL_SKILL_YAML_STRING="\"$(escape_native_quoted_string "$decoded")\""
 }
@@ -476,7 +558,13 @@ read_canonical_skill_frontmatter() {
     local description=""
     local description_yaml=""
 
+    validate_yaml_printable_utf8_file "$path" || {
+        log_error "Invalid canonical skill frontmatter: $path"
+        return 1
+    }
+
     while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
         if [[ "$line" == "---" ]]; then
             delimiters=$((delimiters + 1))
             [[ "$delimiters" -eq 2 ]] && break
@@ -1053,4 +1141,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
