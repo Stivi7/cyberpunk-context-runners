@@ -20,6 +20,8 @@ mkdir -p "$project"
 git -C "$project" init -q
 assert_exit 0 run_cli "$project" init
 assert_exit 0 run_cli "$project" validate
+git -C "$project" add -A
+git -C "$project" -c user.name="Fixture" -c user.email="fixture@example.test" commit -qm "baseline"
 before="$(cksum "$project/.cyberpunk/generated.yml")"
 git_before="$(git -C "$project" status --porcelain)"
 assert_exit 0 run_cli "$project" status
@@ -72,6 +74,30 @@ printf '%s\n' 'execution:' '  max_concurrent_agents: 3' >> "$project/.cyberpunk/
 capture run_cli "$project" validate
 assert_eq 1 "$COMMAND_STATUS"
 assert_contains "$COMMAND_OUTPUT" "Configuration section must appear exactly once: execution"
+cp "$project/config.fixed.yml" "$project/.cyberpunk/config.yml"
+
+sed 's/enabled: \[codex, claude, cursor\]/enabled: [codex, warp]/' "$project/config.fixed.yml" > "$project/.cyberpunk/config.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Unknown configured runtime: warp"
+cp "$project/config.fixed.yml" "$project/.cyberpunk/config.yml"
+
+awk '{ print; if ($0 == "  fallback: inherit") print "  fallback: inherit" }' "$project/config.fixed.yml" > "$project/.cyberpunk/config.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Configuration key must appear exactly once: models.fallback"
+cp "$project/config.fixed.yml" "$project/.cyberpunk/config.yml"
+
+awk '{ print; if ($0 == "    deep:") print "    deep:" }' "$project/config.fixed.yml" > "$project/.cyberpunk/config.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Model profile must appear exactly once: deep"
+cp "$project/config.fixed.yml" "$project/.cyberpunk/config.yml"
+
+awk '{ print; if ($0 == "    neon: balanced") print "    neon: balanced" }' "$project/config.fixed.yml" > "$project/.cyberpunk/config.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Model role must appear exactly once: neon"
 cp "$project/config.fixed.yml" "$project/.cyberpunk/config.yml"
 
 test_start "validation rejects invalid concurrency and missing expected native agent"
@@ -230,6 +256,33 @@ capture run_cli "$project" validate
 assert_eq 1 "$COMMAND_STATUS"
 assert_contains "$COMMAND_OUTPUT" "Recorded parallel-safe jobs overlap mutable scope: src/** and src/frontend/**"
 rm -rf "$project/.cyberpunk/runs/glob-overlap"
+
+write_run_state sibling-scopes <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  alpha:
+    native_agent: neon
+    agent_instance: agent-alpha
+    parallel_safe: true
+    allowed_scope: [src/a/**]
+    review_agent_instance: review-alpha
+    review_context: fresh
+    review_status: approved
+  beta:
+    native_agent: daemon
+    agent_instance: agent-beta
+    parallel_safe: true
+    allowed_scope: [src/b/**]
+    review_agent_instance: review-beta
+    review_context: fresh
+    review_status: approved
+fallback:
+  used: false
+EOF
+assert_exit 0 run_cli "$project" validate
+rm -rf "$project/.cyberpunk/runs/sibling-scopes"
 
 mkdir -p "$project/.cyberpunk/runs/empty"
 : > "$project/.cyberpunk/runs/empty/state.yml"
