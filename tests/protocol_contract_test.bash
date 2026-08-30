@@ -120,6 +120,19 @@ for value in \
     assert_contains "$workflow_content" "$value" "run-state evidence schema"
 done
 
+test_start "fallback vocabulary records the only supported observed model recovery"
+for value in \
+    "native_tools_unavailable" \
+    "delegation_disabled_by_policy" \
+    "delegation_disabled_by_user" \
+    "no_parallel_safe_packets" \
+    "runtime_spawn_failure" \
+    'retries once with `inherit`' \
+    "built-in default worker" \
+    "no duplicate fallback agent files"; do
+    assert_contains "$workflow_content" "$value" "fallback protocol"
+done
+
 test_start "work packets and skills enforce safe native isolation and fresh review"
 for value in \
     "parallel_safe: true" \

@@ -148,11 +148,102 @@ jobs:
     allowed_scope: [src/frontend/**]
     review_agent_instance: codex-agent-reviewer
     review_context: fresh
+    verification_observed: [bash tests/frontend.bash]
     review_status: approved
+    result_commit: def456
+assembled_review:
+  integrated_commit: fed789
+  review_agent_instance: codex-agent-assembled-reviewer
+  review_context: fresh
+  verification_observed: [bash tests/assembled.bash]
+  review_status: approved
 fallback:
   used: false
 EOF
 assert_exit 0 run_cli "$project" validate
+
+write_run_state missing-approved-evidence <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  frontend:
+    native_agent: neon
+    agent_instance: codex-agent-worker
+    parallel_safe: true
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: codex-agent-reviewer
+    review_context: fresh
+    verification_observed: []
+    review_status: approved
+    result_commit: def456
+assembled_review:
+  integrated_commit: fed789
+  review_agent_instance: codex-agent-assembled-reviewer
+  review_context: fresh
+  verification_observed: [bash tests/assembled.bash]
+  review_status: approved
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Approved review requires verification_observed or verification_skipped_reason"
+rm -rf "$project/.cyberpunk/runs/missing-approved-evidence"
+
+write_run_state missing-assembled-review <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  frontend:
+    native_agent: neon
+    agent_instance: codex-agent-worker
+    parallel_safe: true
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: codex-agent-reviewer
+    review_context: fresh
+    verification_observed: [bash tests/frontend.bash]
+    review_status: approved
+    result_commit: def456
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Recorded run state requires exactly one assembled_review section"
+rm -rf "$project/.cyberpunk/runs/missing-assembled-review"
+
+write_run_state invalid-assembled-review <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  frontend:
+    native_agent: neon
+    agent_instance: codex-agent-worker
+    parallel_safe: true
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: codex-agent-reviewer
+    review_context: fresh
+    verification_observed: [bash tests/frontend.bash]
+    review_status: approved
+    result_commit: def456
+assembled_review:
+  integrated_commit: null
+  review_agent_instance: null
+  review_context: stale
+  verification_observed: []
+  review_status: approved
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Approved assembled review lacks fresh reviewer identity/context"
+assert_contains "$COMMAND_OUTPUT" "Approved assembled review requires integrated_commit"
+assert_contains "$COMMAND_OUTPUT" "Approved review requires verification_observed or verification_skipped_reason"
+rm -rf "$project/.cyberpunk/runs/invalid-assembled-review"
 
 write_run_state invalid-maximum <<'EOF'
 max_concurrent_agents: 4
@@ -274,7 +365,9 @@ jobs:
     allowed_scope: [src/a/**]
     review_agent_instance: review-alpha
     review_context: fresh
+    verification_observed: [bash tests/alpha.bash]
     review_status: approved
+    result_commit: alpha456
   beta:
     native_agent: daemon
     agent_instance: agent-beta
@@ -282,7 +375,15 @@ jobs:
     allowed_scope: [src/b/**]
     review_agent_instance: review-beta
     review_context: fresh
+    verification_observed: [bash tests/beta.bash]
     review_status: approved
+    result_commit: beta456
+assembled_review:
+  integrated_commit: combined789
+  review_agent_instance: assembled-reviewer
+  review_context: fresh
+  verification_observed: [bash tests/assembled.bash]
+  review_status: approved
 fallback:
   used: false
 EOF
