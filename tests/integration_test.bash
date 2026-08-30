@@ -137,6 +137,7 @@ assert_file "$project/.codex/agents/nexus.toml"
 assert_file "$project/.claude/agents/nexus.md"
 assert_file "$project/.cursor/agents/nexus.md"
 assert_eq 33 "$(grep -Fc '    kind: "agent"' "$project/.cyberpunk/generated.yml")" "fresh native agent manifest count"
+assert_eq 48 "$(grep -Fc '    kind: "skill"' "$project/.cyberpunk/generated.yml")" "fresh native skill manifest count"
 assert_file "$project/agents/fixer.md"
 assert_file "$project/skills/core/requirements-discovery/SKILL.md"
 

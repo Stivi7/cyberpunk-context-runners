@@ -290,6 +290,49 @@ native_path() {
     esac
 }
 
+native_skill_path() {
+    local project="$1"
+    local runtime="$2"
+    local skill="$3"
+
+    case "$runtime" in
+        codex) printf '%s\n' "$project/.agents/skills/$skill/SKILL.md" ;;
+        claude) printf '%s\n' "$project/.claude/skills/$skill/SKILL.md" ;;
+        cursor) printf '%s\n' "$project/.cursor/skills/$skill/SKILL.md" ;;
+        *) fail "unknown native skill runtime fixture: $runtime" ;;
+    esac
+}
+
+canonical_skill_field() {
+    local path="$1"
+    local field="$2"
+
+    awk -v field="$field" '
+        $0 == "---" { delimiters += 1; next }
+        delimiters == 1 && index($0, field ": ") == 1 {
+            print substr($0, length(field) + 3)
+            exit
+        }
+    ' "$path"
+}
+
+replace_enabled_project_skills() {
+    local path="$1"
+    local value="$2"
+    local temporary="$path.tmp"
+
+    awk -v value="$value" '
+        $0 == "  enabled_project: []" {
+            print "  enabled_project: " value
+            replaced=1
+            next
+        }
+        { print }
+        END { if (!replaced) exit 1 }
+    ' "$path" > "$temporary"
+    mv "$temporary" "$path"
+}
+
 replace_exact_line() {
     local path="$1"
     local before="$2"
@@ -433,6 +476,141 @@ for role in "${roles[@]}"; do
     done
 done
 assert_eq 33 "$(grep -Fc '    kind: "agent"' "$project/.cyberpunk/generated.yml")" "all-runtime agent manifest count"
+
+test_start "all enabled runtimes receive thin wrappers for every canonical core skill"
+core_skill_paths=()
+while IFS= read -r core_skill_path; do
+    core_skill_paths+=("$core_skill_path")
+done < <(find "$project/skills/core" -mindepth 2 -maxdepth 2 -type f -name SKILL.md | LC_ALL=C sort)
+assert_eq 16 "${#core_skill_paths[@]}" "canonical core skill fixture count"
+for runtime in "${runtimes[@]}"; do
+    native_skill_root="$(dirname "$(dirname "$(native_skill_path "$project" "$runtime" placeholder)")")"
+    native_skill_count=0
+    if [[ -d "$native_skill_root" ]]; then
+        native_skill_count="$(find "$native_skill_root" -mindepth 2 -maxdepth 2 -type f -name SKILL.md | wc -l | tr -d ' ')"
+    fi
+    assert_eq "${#core_skill_paths[@]}" "$native_skill_count" "$runtime native core skill count"
+done
+for core_skill_path in "${core_skill_paths[@]}"; do
+    core_skill="$(canonical_skill_field "$core_skill_path" name)"
+    core_description="$(canonical_skill_field "$core_skill_path" description)"
+    for runtime in "${runtimes[@]}"; do
+        wrapper_path="$(native_skill_path "$project" "$runtime" "$core_skill")"
+        wrapper="$(<"$wrapper_path")"
+        assert_contains "$wrapper" "name: $core_skill" "$runtime $core_skill wrapper name"
+        assert_contains "$wrapper" "description: $core_description" "$runtime $core_skill wrapper description"
+        assert_contains "$wrapper" "../../../skills/core/$core_skill/SKILL.md" "$runtime $core_skill canonical pointer"
+        assert_contains "$wrapper" "completely and follow it" "$runtime $core_skill pointer instruction"
+        assert_contains "$wrapper" "relative to that canonical skill directory" "$runtime $core_skill resolution instruction"
+        assert_not_contains "$wrapper" "## Procedure" "$runtime $core_skill wrapper must not copy canonical body"
+    done
+done
+assert_eq 48 "$(grep -Fc '    kind: "skill"' "$project/.cyberpunk/generated.yml")" "all-runtime core skill manifest count"
+
+test_start "sync registers only explicitly enabled project skills in every selected runtime"
+project_skills_project="$SANDBOX_ROOT/project-skills"
+mkdir -p "$project_skills_project"
+assert_exit 0 run_cli "$project_skills_project" init
+mkdir -p "$project_skills_project/skills/project/release-policy" "$project_skills_project/skills/project/unlisted"
+printf '%s\n' \
+    '---' \
+    'name: release-policy' \
+    'description: Use when a release needs explicit approval and rollback policy.' \
+    '---' \
+    '' \
+    '## Procedure' \
+    'Project-owned policy body.' > "$project_skills_project/skills/project/release-policy/SKILL.md"
+printf '%s\n' \
+    '---' \
+    'name: unlisted' \
+    'description: Use when an unlisted policy is requested.' \
+    '---' \
+    '' \
+    '## Procedure' \
+    'Unlisted project body.' > "$project_skills_project/skills/project/unlisted/SKILL.md"
+replace_enabled_project_skills "$project_skills_project/.cyberpunk/config.yml" '[release-policy]'
+project_skill_before="$(cksum "$project_skills_project/skills/project/release-policy/SKILL.md")"
+assert_exit 0 run_cli "$project_skills_project" sync
+for runtime in "${runtimes[@]}"; do
+    project_wrapper_path="$(native_skill_path "$project_skills_project" "$runtime" release-policy)"
+    assert_file "$project_wrapper_path"
+    project_wrapper="$(<"$project_wrapper_path")"
+    assert_contains "$project_wrapper" 'name: release-policy' "$runtime project skill wrapper name"
+    assert_contains "$project_wrapper" 'description: Use when a release needs explicit approval and rollback policy.' "$runtime project skill wrapper description"
+    assert_contains "$project_wrapper" '../../../skills/project/release-policy/SKILL.md' "$runtime project skill canonical pointer"
+    assert_not_path "$(native_skill_path "$project_skills_project" "$runtime" unlisted)"
+done
+assert_eq "$project_skill_before" "$(cksum "$project_skills_project/skills/project/release-policy/SKILL.md")" "project canonical skill changed during sync"
+
+test_start "skill discovery rejects missing and ambiguous canonical project skills before wrapper writes"
+missing_project_skill_project="$SANDBOX_ROOT/missing-project-skill"
+mkdir -p "$missing_project_skill_project"
+assert_exit 0 run_cli "$missing_project_skill_project" init --runtime codex
+replace_enabled_project_skills "$missing_project_skill_project/.cyberpunk/config.yml" '[missing-policy]'
+rm -rf "$missing_project_skill_project/.agents"
+capture run_cli "$missing_project_skill_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'missing-policy' "missing project skill error"
+assert_not_path "$missing_project_skill_project/.agents/skills"
+
+mismatched_project_skill_project="$SANDBOX_ROOT/mismatched-project-skill"
+mkdir -p "$mismatched_project_skill_project"
+assert_exit 0 run_cli "$mismatched_project_skill_project" init --runtime codex
+mkdir -p "$mismatched_project_skill_project/skills/project/release-policy"
+printf '%s\n' '---' 'name: renamed-policy' 'description: Use when names do not match.' '---' > "$mismatched_project_skill_project/skills/project/release-policy/SKILL.md"
+replace_enabled_project_skills "$mismatched_project_skill_project/.cyberpunk/config.yml" '[release-policy]'
+rm -rf "$mismatched_project_skill_project/.agents"
+capture run_cli "$mismatched_project_skill_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'release-policy' "mismatched project skill error"
+assert_not_path "$mismatched_project_skill_project/.agents/skills"
+
+colliding_project_skill_project="$SANDBOX_ROOT/colliding-project-skill"
+mkdir -p "$colliding_project_skill_project"
+assert_exit 0 run_cli "$colliding_project_skill_project" init --runtime codex
+mkdir -p "$colliding_project_skill_project/skills/project/task-decomposition"
+printf '%s\n' '---' 'name: task-decomposition' 'description: Use when a project shadows a core skill.' '---' > "$colliding_project_skill_project/skills/project/task-decomposition/SKILL.md"
+replace_enabled_project_skills "$colliding_project_skill_project/.cyberpunk/config.yml" '[task-decomposition]'
+rm -rf "$colliding_project_skill_project/.agents"
+capture run_cli "$colliding_project_skill_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'task-decomposition' "core/project collision error"
+assert_not_path "$colliding_project_skill_project/.agents/skills"
+
+duplicate_core_skill_project="$SANDBOX_ROOT/duplicate-core-skill"
+mkdir -p "$duplicate_core_skill_project"
+assert_exit 0 run_cli "$duplicate_core_skill_project" init --runtime codex
+sed 's/^name: repository-discovery$/name: task-decomposition/' \
+    "$duplicate_core_skill_project/skills/core/repository-discovery/SKILL.md" > "$duplicate_core_skill_project/skills/core/repository-discovery/SKILL.md.tmp"
+mv "$duplicate_core_skill_project/skills/core/repository-discovery/SKILL.md.tmp" "$duplicate_core_skill_project/skills/core/repository-discovery/SKILL.md"
+rm -rf "$duplicate_core_skill_project/.agents"
+capture run_cli "$duplicate_core_skill_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'task-decomposition' "duplicate core skill error"
+assert_not_path "$duplicate_core_skill_project/.agents/skills"
+
+test_start "unowned and drifted native skill wrappers follow generated asset collision rules"
+skill_collision_project="$SANDBOX_ROOT/skill-collision"
+mkdir -p "$skill_collision_project/.agents/skills/task-decomposition"
+printf '%s\n' 'user-owned-wrapper' > "$skill_collision_project/.agents/skills/task-decomposition/SKILL.md"
+skill_collision_before="$(cksum "$skill_collision_project/.agents/skills/task-decomposition/SKILL.md")"
+capture run_cli "$skill_collision_project" init --runtime codex
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'collision' "unowned skill wrapper collision"
+assert_eq "$skill_collision_before" "$(cksum "$skill_collision_project/.agents/skills/task-decomposition/SKILL.md")" "unowned skill wrapper was replaced"
+
+skill_drift_project="$SANDBOX_ROOT/skill-drift"
+mkdir -p "$skill_drift_project"
+assert_exit 0 run_cli "$skill_drift_project" init --runtime codex
+skill_drift_path="$(native_skill_path "$skill_drift_project" codex task-decomposition)"
+printf '%s\n' 'local-skill-wrapper-edit' >> "$skill_drift_path"
+skill_drift_before="$(cksum "$skill_drift_path")"
+capture run_cli "$skill_drift_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'drift' "owned skill wrapper drift"
+assert_eq "$skill_drift_before" "$(cksum "$skill_drift_path")" "non-force sync changed drifted skill wrapper"
+assert_exit 0 run_cli "$skill_drift_project" sync --force
+assert_not_contains "$(<"$skill_drift_path")" 'local-skill-wrapper-edit' "force did not regenerate owned skill wrapper"
 
 test_start "representative role profiles map to exact vendor models"
 for role in fixer operator daemon gatekeeper; do
