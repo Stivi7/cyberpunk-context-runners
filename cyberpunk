@@ -461,9 +461,7 @@ parse_canonical_skill_string() {
             ;;
     esac
 
-    case "$decoded" in
-        *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
-    esac
+    [[ "$decoded" != *[[:cntrl:]]* ]] || return 1
     CANONICAL_SKILL_STRING="$decoded"
     CANONICAL_SKILL_YAML_STRING="\"$(escape_native_quoted_string "$decoded")\""
 }

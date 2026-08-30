@@ -239,3 +239,65 @@ made.
 The only unresolved concern is the repeatable local test-harness cutoff. Run
 the runtime, integration, and aggregate Bash commands in an unrestricted
 terminal for complete exit-status evidence.
+
+## Fix Round 3
+
+### Finding addressed
+
+Canonical skill metadata is now rejected if its decoded value contains any
+control character. This prevents raw C0 bytes—including backspace, vertical
+tab, form feed, escape, and the remaining control range—from reaching the
+double-quoted YAML wrapper serializer. The behavior preserves exact string
+semantics by rejecting unsafe input rather than silently dropping or changing
+it.
+
+### RED evidence
+
+Before the parser hardening, a real project skill containing a raw vertical
+tab in its quoted description produced:
+
+```text
+CONTROL_RED_STATUS=0
+CONTROL_WRAPPER_CREATED=true
+```
+
+That demonstrated invalid YAML could be emitted from canonical metadata.
+
+### GREEN and verification evidence
+
+- A raw ESC description now fails before wrapper generation:
+
+  ```text
+  CONTROL_GREEN_STATUS=1
+  [ERROR] Invalid canonical skill frontmatter: skills/project/release-policy/SKILL.md
+  CONTROL_WRAPPER_ABSENT=true
+  ```
+
+- A deterministic real-CLI loop verified rejection of every C0 byte that can
+  be represented in a Bash variable (`0x01..0x08`, `0x0B`, `0x0C`, and
+  `0x0E..0x1F`):
+
+  ```text
+  ALL_REPRESENTABLE_C0_REJECTED=true
+  ```
+
+- A raw NUL metadata fixture also returned status 1 with the same invalid
+  frontmatter error and emitted no wrapper.
+- `bash tests/skill_contract_test.bash` passed.
+- `bash -n cyberpunk`, `bash -n lib/config.bash`,
+  `bash -n lib/generated-assets.bash`, and test syntax checks passed.
+- `git diff --check` passed.
+
+Per the narrow-scope instruction, the known long-cutoff runtime, integration,
+and aggregate suites were not rerun.
+
+### Fix Round 3 files changed
+
+- `cyberpunk`
+- `tests/runtime_adapter_test.bash`
+- `.superpowers/sdd/2026-08-29-runtime-native-parallel-agents/task-4-report.md`
+
+### Fix Round 3 concern
+
+The existing local long-suite cutoff remains the only concern; it is unchanged
+and was intentionally not retried for this focused parser correction.

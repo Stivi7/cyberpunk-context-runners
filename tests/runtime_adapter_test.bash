@@ -681,6 +681,34 @@ for metadata_index in "${!malformed_metadata_names[@]}"; do
     assert_not_path "$(native_skill_path "$metadata_project" codex release-policy)"
 done
 
+yaml_control_names=(
+    soh stx etx eot enq ack bel backspace
+    vertical-tab form-feed record-separator group-separator record-separator-2 unit-separator
+    data-link-escape device-control-1 device-control-2 device-control-3 device-control-4
+    negative-ack synchronize-idle end-of-medium substitute escape file-separator group-separator-2 unit-separator-2
+)
+yaml_control_values=(
+    $'\x01' $'\x02' $'\x03' $'\x04' $'\x05' $'\x06' $'\x07' $'\x08'
+    $'\x0b' $'\x0c' $'\x0e' $'\x0f' $'\x10' $'\x11'
+    $'\x12' $'\x13' $'\x14' $'\x15' $'\x16' $'\x17' $'\x18' $'\x19' $'\x1a' $'\x1b' $'\x1c' $'\x1d' $'\x1e' $'\x1f'
+)
+for control_index in "${!yaml_control_names[@]}"; do
+    printf '%s\n' '---' 'name: release-policy' > "$metadata_project/skills/project/release-policy/SKILL.md"
+    printf 'description: "unsafe%smetadata"\n' "${yaml_control_values[$control_index]}" >> "$metadata_project/skills/project/release-policy/SKILL.md"
+    printf '%s\n' '---' >> "$metadata_project/skills/project/release-policy/SKILL.md"
+    capture run_cli "$metadata_project" sync
+    assert_eq 1 "$COMMAND_STATUS"
+    assert_contains "$COMMAND_OUTPUT" 'Invalid canonical skill frontmatter' "${yaml_control_names[$control_index]} control-byte metadata error"
+    assert_not_path "$(native_skill_path "$metadata_project" codex release-policy)"
+done
+printf '%s\n' '---' 'name: release-policy' > "$metadata_project/skills/project/release-policy/SKILL.md"
+printf 'description: "unsafe\000metadata"\n' >> "$metadata_project/skills/project/release-policy/SKILL.md"
+printf '%s\n' '---' >> "$metadata_project/skills/project/release-policy/SKILL.md"
+capture run_cli "$metadata_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" 'Invalid canonical skill frontmatter' "nul control-byte metadata error"
+assert_not_path "$(native_skill_path "$metadata_project" codex release-policy)"
+
 printf '%s\n' '---' 'name: release-policy' 'description: "Release \"quoted\" from C:\\workspace"' '---' > "$metadata_project/skills/project/release-policy/SKILL.md"
 assert_exit 0 run_cli "$metadata_project" sync
 quoted_wrapper="$(native_skill_path "$metadata_project" codex release-policy)"
