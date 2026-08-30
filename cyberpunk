@@ -1069,18 +1069,24 @@ mutable_scopes_overlap() {
     local right="$2"
     local left_root="$left"
     local right_root="$right"
+    local left_uncertain=false
+    local right_uncertain=false
 
     [[ -n "$left" && -n "$right" ]] || return 1
     [[ "$left" == "$right" ]] && return 0
-    case "$left" in *'*'*) ;; *) left_root="$left" ;; esac
-    case "$right" in *'*'*) ;; *) right_root="$right" ;; esac
-    left_root="${left_root%/**}"
-    right_root="${right_root%/**}"
+    [[ "$left" == *\* && "$left" != */\*\* ]] && left_uncertain=true
+    [[ "$right" == *\* && "$right" != */\*\* ]] && right_uncertain=true
+    if [[ "$left_root" == */\*\* ]]; then
+        left_root="${left_root:0:${#left_root}-3}"
+    fi
+    if [[ "$right_root" == */\*\* ]]; then
+        right_root="${right_root:0:${#right_root}-3}"
+    fi
     left_root="${left_root%/}"
     right_root="${right_root%/}"
     [[ -n "$left_root" && -n "$right_root" ]] || return 0
     [[ "$left_root" == "$right_root" || "$left_root" == "$right_root"/* || "$right_root" == "$left_root"/* ]] && return 0
-    case "$left$right" in *'*'* ) return 0 ;; esac
+    [[ "$left_uncertain" == true || "$right_uncertain" == true ]] && return 0
     return 1
 }
 
@@ -1106,6 +1112,7 @@ validate_recorded_run_state() {
     local scope_job
     local scope_path
     local state_records
+    local state_key_count
     local seen_scopes=""
     local errors=0
 
@@ -1118,7 +1125,11 @@ validate_recorded_run_state() {
             continue
         fi
         for state_records in runtime execution_mode max_concurrent_agents jobs fallback; do
-            if [[ "$(grep -Fxc "${state_records}:" "$state")" -ne 1 ]]; then
+            case "$state_records" in
+                jobs|fallback) state_key_count="$(grep -Fxc "${state_records}:" "$state")" ;;
+                *) state_key_count="$(grep -Ec "^${state_records}:[[:space:]]*[^[:space:]]" "$state" || true)" ;;
+            esac
+            if [[ "$state_key_count" -ne 1 ]]; then
                 log_error "Recorded run state requires exactly one ${state_records} section/key: $state"
                 errors=$((errors + 1))
             fi
