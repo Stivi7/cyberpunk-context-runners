@@ -39,6 +39,7 @@ for skill in "${expected_skills[@]}"; do
     path="$SKILL_ROOT/core/$skill/SKILL.md"
     assert_file "$path"
     content="$(<"$path")"
+    assert_eq 2 "$(grep -Fxc -- '---' "$path")" "$skill frontmatter delimiter count"
     assert_contains "$content" "name: $skill" "$skill frontmatter name"
     assert_contains "$content" "description: Use when" "$skill frontmatter description"
     for heading in "## Metadata" "## When to Use" "## Inputs" "## Procedure" "## Verification" "## Output"; do

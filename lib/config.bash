@@ -85,7 +85,7 @@ configured_runtimes() {
 }
 
 configured_project_skills() {
-    configured_list "$1" skills enabled_project
+    configured_list "$1" skills enabled_project | LC_ALL=C sort -u
 }
 
 config_has_section() {
