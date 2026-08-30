@@ -112,6 +112,17 @@ assert_contains "$worktree" "Mutating implementation jobs" "worktree trigger sco
 assert_contains "$worktree" "only approved planning-artifact exception" "worktree PRD exception"
 assert_not_contains "$worktree" "Any mutating agent job" "worktree trigger must not cover planning artifacts"
 assert_not_contains "$worktree" "every job that may write" "worktree usage must be implementation-scoped"
+for value in "native runtime" "worker branch" "base commit" "allowed scope" "integration contract" "Nexus creates"; do
+    assert_contains "$worktree" "$value" "native worktree compatibility"
+done
+decomposition="$(<"$SKILL_ROOT/core/task-decomposition/SKILL.md")"
+for value in "parallel_safe" "dependencies" "allowed_scope" "integration owner" "integration contract" "required skills" "model profile" "Worktree isolation"; do
+    assert_contains "$decomposition" "$value" "native decomposition safety"
+done
+review="$(<"$SKILL_ROOT/core/code-review/SKILL.md")"
+for value in "fresh context" "review_agent_instance" "review_context: fresh" "result_commit" "verification_observed" "runtime-provided" "assembled"; do
+    assert_contains "$review" "$value" "fresh Gatekeeper review evidence"
+done
 memory="$(<"$SKILL_ROOT/core/memory-curation/SKILL.md")"
 for value in "evidence" "generalizable" "actionable" "secret" "superseded"; do
     assert_contains "$memory" "$value" "memory safeguard"

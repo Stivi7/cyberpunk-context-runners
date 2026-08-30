@@ -48,6 +48,16 @@ Use only the roles and durable artifacts justified by the classification.
 
 Operator refreshes repository facts when needed. Mind defines the implementation and verification approach for standard or complex work. Interrogator reviews complex plans. Fragmenter turns complex work into dependency-aware units with explicit file ownership and interface contracts.
 
+## Native Dispatch
+
+Nexus is the only component allowed to spawn, resume, steer, interrupt, or replace Cyberpunk subagents. Every other role performs its assigned work only; it never creates sibling or nested team agents. Fresh native contexts receive the complete work packet, required skills, result evidence, and findings because conversational context is not inherited.
+
+Nexus resolves the active runtime and configured `max_concurrent_agents` before dispatch. It honors an observable lower runtime cap and `agents.enabled = false`. The global maximum is three active subagents, including planners, workers, and reviewers but excluding Nexus.
+
+Dependency-bound planning stages run sequentially as fresh native roles. Nexus places only dependency-ready packets into a ready queue after their dependencies are approved and integrated where required. It dispatches only `parallel_safe: true` packets while fewer than three active subagents occupy the global capacity. A full queue leaves excess ready packets queued; capacity waiting is not a fallback.
+
+When a worker fails, Nexus continues unrelated jobs, retains the failed worker's worktree and evidence, and never integrates that result. Every completed result receives a fresh Gatekeeper review; independent reviews share the same global capacity. On rejection, Nexus resumes the original worker when supported, otherwise it replaces the worker with the complete packet, result evidence, and findings. Nexus merges approved results in dependency order and starts a different fresh Gatekeeper instance for assembled-change review before delivery.
+
 ## Worktree Assignment
 
 Every mutating implementation work unit receives its own branch and Git worktree, including sequential jobs. Read-only planning and review do not require worktrees. The approved PRD planning-artifact exception is defined under Requirements Discovery; it applies only to The Fixer's focused PRD commit on the current named branch.
@@ -58,25 +68,25 @@ Every mutating implementation work unit receives its own branch and Git worktree
 
 Before creation, verify that a project-local worktree root is ignored. Run project setup and baseline verification inside the new worktree. Record the branch, worktree, base commit, owner, dependencies, and initial status in local run state.
 
-Parallel jobs require non-overlapping file ownership or an explicit integration contract. A runtime without parallel agents executes the same isolated jobs sequentially.
+Parallel jobs require non-overlapping file ownership or a named integration owner with an explicit integration contract. `parallel_safe: true` is valid only when dependencies are satisfied and mutable paths do not overlap; worktree isolation does not make overlapping ownership safe. A runtime without native delegation executes the same isolated jobs sequentially and records why.
 
 ## Implementation
 
-The assigned specialist reads its role, required skills, work packet, relevant memory, and project context. It changes only the allowed scope, runs relevant discovered verification commands, and commits verified work to the worker branch. The result must include `result_commit` and `merge_ready`.
+The assigned specialist reads its role, required skills, work packet, relevant memory, and project context. It changes only the allowed scope, runs relevant discovered verification commands, and commits verified work to the worker branch. It never spawns or delegates Cyberpunk team agents. The result must include `result_commit` and `merge_ready`.
 
 ## Review and Repair
 
-Gatekeeper independently inspects requirements, diff, commit, and fresh verification evidence. A rejected finding returns to the same worker worktree. After two unsuccessful repair cycles for the same finding, Nexus requires a new diagnosis. After a third unresolved cycle, Nexus escalates with evidence and the smallest needed decision.
+Gatekeeper independently inspects requirements, diff, commit, and fresh verification evidence in a fresh context. Each review records the runtime-provided reviewer identity when exposed; otherwise it records `null` and never invents an identity. When native delegation is available, approval without fresh context is invalid. A rejected finding returns to the same worker worktree. After two unsuccessful repair cycles for the same finding, Nexus requires a new diagnosis. After a third unresolved cycle, Nexus escalates with evidence and the smallest needed decision.
 
 ## Integration
 
-Nexus merges only Gatekeeper-approved worker branches into the resolved integration branch, in dependency order. It reruns assembled verification after each relevant merge. Contract-level conflicts are resolved centrally by the owner of the integration contract.
+Nexus merges only Gatekeeper-approved worker branches into the resolved integration branch, in dependency order. It reruns assembled verification after each relevant merge. A different fresh Gatekeeper performs assembled-change review after the approved results are integrated. Contract-level conflicts are resolved centrally by the named owner of the integration contract.
 
 Nexus never merges implicitly into `main`, another protected branch, or a branch outside the resolved task integration branch. Pushes and pull requests require separate authority.
 
 ## Delivery
 
-Deliver the verified integration branch and commit, acceptance results, worker branch and merge summary, changed files, commands run, checks not run with reasons, remaining risks, and memory updates.
+Deliver the verified integration branch and commit, acceptance results, worker branch and merge summary, changed files, commands run, checks not run with reasons, remaining risks, and memory updates. Separately list native agents that ran concurrently, native agents that ran sequentially because of dependencies, roles performed in the parent context because native delegation was unavailable, and jobs that waited only for queue capacity. Report preferred/effective models and fallbacks actually observed, plus tests, result commits, fresh reviews, and merges actually observed. Never claim native agents, concurrency, model use, tests, approvals, or merges from configuration or planned execution alone; native agent evidence is required.
 
 ## Retrospective
 
@@ -95,14 +105,17 @@ worker_branch: cyberpunk/TASK-014/daemon-session-api
 worktree: .worktrees/TASK-014/daemon-session-api
 allowed_scope:
   - path/to/auth/**
+parallel_safe: true
+dependencies: []
+integration_owner: null
+integration_contract: null
+required_skills: []
+model_profile: balanced
 acceptance:
   - Expired sessions are rejected
 verification_categories:
   - unit_test
-dependencies: []
 memory_refs: []
-required_skills:
-  - scoped-implementation
 ```
 
 ## Result Contract
@@ -124,18 +137,57 @@ merge_ready: true
 Local state at `.cyberpunk/runs/<task-id>/state.yml` is resumable but ignored by Git.
 
 ```yaml
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
 integration_branch: cyberpunk/TASK-014-session-renewal
 base_commit: abc123
 jobs:
-  backend:
-    agent: daemon
-    branch: cyberpunk/TASK-014/daemon-session-api
-    worktree: .worktrees/TASK-014/daemon-session-api
-    status: verified
-    result_commit: def456
+  frontend:
+    role: neon
+    native_agent: neon
+    agent_instance: codex-agent-7f3a
+    model_preferred: gpt-5.6-terra
+    model_effective: gpt-5.6-terra
+    model_fallback_reason: null
+    parallel_safe: true
+    dependencies: []
+    allowed_scope: [src/frontend/**]
+    integration_owner: null
+    integration_contract: null
+    worker_branch: cyberpunk/TASK-014/neon-frontend
+    worktree: .worktrees/TASK-014/frontend
+    execution_status: completed
+    review_agent_instance: codex-agent-c91b
+    review_context: fresh
+    verification_observed: []
     review_status: approved
+    result_commit: def456
     merged: false
+fallback:
+  used: false
+  category: null
+  reason: null
+  observed_evidence: []
+  affected_jobs: []
+  delivery_impact: null
 ```
+
+Run state records observed execution rather than the plan. `native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. `review_context: fresh`, `result_commit`, and `verification_observed` are required evidence for an approved native review. These names are compatible with local recorded-state validation.
+
+## Sequential Fallback
+
+Sequential fallback is allowed only in these five categories:
+
+1. `native_tools_unavailable` — the active runtime exposes no native subagent tools.
+2. `delegation_disabled_by_policy` — workspace or organization policy disables delegation.
+3. `delegation_disabled_by_user` — the user disabled multi-agent behavior.
+4. `no_parallel_safe_packets` — no dependency-ready packet is safe to run concurrently.
+5. `runtime_spawn_failure` — a runtime-specific spawn failure remains after the allowed retry.
+
+The first three categories may perform safe roles in the parent context; the last two may use real subagents sequentially. Every fallback records its category, reason, observed evidence, affected jobs, and delivery impact. A full queue is capacity waiting, never fallback.
+
+For model rejection, Nexus retries once with `inherit`, records the preferred model, observed failure reason, and effective model. It prefers the same custom role with an explicit inherited model; if unavailable, it uses the runtime's built-in default worker with the complete canonical role and packet. Native registrations are never duplicated for fallback.
 
 ## Authority
 

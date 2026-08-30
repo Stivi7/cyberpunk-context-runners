@@ -18,21 +18,31 @@ Use before every worker merge. Review the actual commit and diff, not only the h
 
 ## Inputs
 
-Work packet, result commit, worker worktree, diff, project context, implementation evidence, and baseline failures.
+Work packet, result commit, worker worktree, diff, project context, implementation evidence, baseline failures, and runtime-provided reviewer identity when exposed.
 
 ## Procedure
 
-1. Verify result commit, base, scope, and changed files.
-2. Trace acceptance criteria to implementation and tests.
-3. Review correctness, boundaries, failure handling, security, compatibility, and maintainability as applicable.
-4. Rerun relevant verification independently.
-5. Classify findings as critical, important, or optional with file evidence.
-6. Approve merge readiness only after required findings are resolved.
+1. Start in a fresh context; when native delegation is available, approval without fresh context is invalid.
+2. Verify result commit, base, scope, and changed files.
+3. Trace acceptance criteria to implementation and tests.
+4. Review correctness, boundaries, failure handling, security, compatibility, and maintainability as applicable.
+5. Rerun relevant verification independently.
+6. Classify findings as critical, important, or optional with file evidence.
+7. Approve merge readiness only after required findings are resolved.
+8. After per-result integration, require a different fresh Gatekeeper instance for assembled review.
 
 ## Verification
 
-The review identifies the exact commit and includes fresh observed evidence for its decision.
+The review identifies the exact commit and includes fresh observed evidence for its decision. An unavailable runtime-provided identifier is recorded as `null`, never invented.
 
 ## Output
+
+```yaml
+review_agent_instance: runtime-provided-id-or-null
+review_context: fresh
+result_commit: def456
+verification_observed: []
+review_status: approved
+```
 
 Status, commit reviewed, acceptance results, verification, prioritized findings, residual risks, and merge-ready decision.
