@@ -41,11 +41,16 @@ sed "s/and use the active runtime's native Cyberpunk agents and skills\. Dispatc
     "$project/AGENTS.md" > "$project/managed.tmp"
 mv "$project/managed.tmp" "$project/AGENTS.md"
 managed_before="$(cksum "$project/AGENTS.md")"
+managed_git_before_validate="$(git -C "$project" status --porcelain)"
 capture run_cli "$project" validate
 assert_eq 1 "$COMMAND_STATUS"
 assert_contains "$COMMAND_OUTPUT" "Managed instruction block differs from canonical content: AGENTS.md"
 assert_eq "$managed_before" "$(cksum "$project/AGENTS.md")" "validate rewrote managed content"
-assert_eq "$git_before" "$(git -C "$project" status --porcelain)" "validate changed the project"
+assert_eq "$managed_git_before_validate" "$(git -C "$project" status --porcelain)" "validate changed the project"
+managed_git_before_status="$(git -C "$project" status --porcelain)"
+assert_exit 0 run_cli "$project" status
+assert_eq "$managed_before" "$(cksum "$project/AGENTS.md")" "status rewrote managed content"
+assert_eq "$managed_git_before_status" "$(git -C "$project" status --porcelain)" "status changed the project"
 assert_exit 0 run_cli "$project" sync --force
 
 sed 's|../../../skills/core/task-decomposition/SKILL.md|../../../skills/core/missing/SKILL.md|' \
