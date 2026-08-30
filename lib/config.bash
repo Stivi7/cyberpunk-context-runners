@@ -384,6 +384,69 @@ model_fallback() {
     ' "$config_path" | while IFS= read -r value; do strip_config_scalar "$value"; done
 }
 
+execution_setting() {
+    local config_path="$1"
+    local key="$2"
+
+    awk -v key="$key" '
+        $0 == "execution:" { in_execution=1; next }
+        in_execution && /^[^[:space:]]/ { exit }
+        in_execution && $0 ~ "^  " key ":[[:space:]]*" {
+            value=$0
+            sub("^  " key ":[[:space:]]*", "", value)
+            print value
+            exit
+        }
+    ' "$config_path" | while IFS= read -r value; do strip_config_scalar "$value"; done
+}
+
+validate_runtime_configuration() {
+    local config_path="$1"
+    local runtime
+    local known
+    local duplicate=false
+    local count=0
+    local maximum
+    local parallelism
+    local errors=0
+    local seen=" "
+
+    while IFS= read -r runtime; do
+        [[ -n "$runtime" ]] || continue
+        count=$((count + 1))
+        known=false
+        for known_runtime in "${SUPPORTED_RUNTIMES[@]}"; do
+            [[ "$runtime" == "$known_runtime" ]] && known=true
+        done
+        if [[ "$known" != true ]]; then
+            printf 'Unknown configured runtime: %s\n' "$runtime" >&2
+            errors=$((errors + 1))
+        fi
+        if [[ "$seen" == *" $runtime "* ]]; then
+            printf 'Duplicate configured runtime: %s\n' "$runtime" >&2
+            errors=$((errors + 1))
+        else
+            seen="$seen$runtime "
+        fi
+    done < <(configured_runtimes "$config_path")
+    if [[ "$count" -eq 0 ]]; then
+        printf 'Missing configured runtimes\n' >&2
+        errors=$((errors + 1))
+    fi
+
+    maximum="$(execution_setting "$config_path" max_concurrent_agents)"
+    if [[ ! "$maximum" =~ ^[0-9]+$ ]] || [[ "$maximum" -lt 1 || "$maximum" -gt 3 ]]; then
+        printf 'max_concurrent_agents must be an integer from 1 to 3 (got: %s)\n' "${maximum:-missing}" >&2
+        errors=$((errors + 1))
+    fi
+    parallelism="$(execution_setting "$config_path" parallelism)"
+    if [[ "$parallelism" != auto && "$parallelism" != sequential ]]; then
+        printf 'parallelism must be auto or sequential (got: %s)\n' "${parallelism:-missing}" >&2
+        errors=$((errors + 1))
+    fi
+    [[ "$errors" -eq 0 ]]
+}
+
 validate_model_configuration() {
     local config_path="$1"
     local role
@@ -402,6 +465,18 @@ validate_model_configuration() {
     fi
 
     for role in "${ROLE_IDS[@]}"; do
+        role_count="$(awk -v role="$role" '
+            $0 == "models:" { in_models=1; next }
+            in_models && /^[^[:space:]]/ { exit }
+            in_models && $0 == "  roles:" { in_roles=1; next }
+            in_roles && /^  [^[:space:]][^:]*:/ { exit }
+            in_roles && $0 ~ "^    " role ":[[:space:]]*" { count++ }
+            END { print count + 0 }
+        ' "$config_path")"
+        if [[ "$role_count" -ne 1 ]]; then
+            printf 'Model role must appear exactly once: %s\n' "$role" >&2
+            error_count=$((error_count + 1))
+        fi
         profile="$(role_profile "$config_path" "$role")"
         if [[ -z "$profile" ]]; then
             printf 'Missing model profile for role: %s\n' "$role" >&2
