@@ -42,7 +42,10 @@ review_agent_instance: runtime-provided-id-or-null
 review_context: fresh
 result_commit: def456
 verification_observed: []
+verification_skipped_reason: explicit reason when no verification was observed
 review_status: approved
 ```
+
+An approved per-result review requires a present `result_commit` and either non-empty `verification_observed` or an explicit `verification_skipped_reason`. An approved assembled review requires the same evidence and an `integrated_commit`.
 
 Status, commit reviewed, acceptance results, verification, prioritized findings, residual risks, and merge-ready decision.

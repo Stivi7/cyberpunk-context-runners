@@ -44,6 +44,11 @@ for agent in "${agents[@]}"; do
     [[ "$agent" == nexus ]] && continue
     content="$(<"$AGENT_ROOT/$agent.md")"
     assert_contains "$content" "./_common-principles.md" "$agent must inherit the nested delegation prohibition"
+    for verb in spawn steer resume interrupt replace; do
+        assert_not_contains "$content" "may $verb" "$agent role-specific contract must not authorize nested $verb"
+        assert_not_contains "$content" "can $verb" "$agent role-specific contract must not authorize nested $verb"
+        assert_not_contains "$content" "allowed to $verb" "$agent role-specific contract must not authorize nested $verb"
+    done
 done
 
 test_start "Coder is a shared contract with backend and frontend specialists"

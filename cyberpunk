@@ -1104,6 +1104,16 @@ validate_recorded_run_state() {
     local review_agent_instance
     local review_context
     local review_status
+    local result_commit
+    local verification_observed
+    local verification_skipped_reason
+    local assembled_record
+    local assembled_integrated_commit
+    local assembled_review_agent_instance
+    local assembled_review_context
+    local assembled_verification_observed
+    local assembled_verification_skipped_reason
+    local assembled_review_status
     local native_evidence=false
     local parallel_claimed=false
     local duplicate_scope
@@ -1124,9 +1134,9 @@ validate_recorded_run_state() {
             errors=$((errors + 1))
             continue
         fi
-        for state_records in runtime execution_mode max_concurrent_agents jobs fallback; do
+        for state_records in runtime execution_mode max_concurrent_agents jobs assembled_review fallback; do
             case "$state_records" in
-                jobs|fallback) state_key_count="$(grep -Fxc "${state_records}:" "$state")" ;;
+                jobs|assembled_review|fallback) state_key_count="$(grep -Fxc "${state_records}:" "$state")" ;;
                 *) state_key_count="$(grep -Ec "^${state_records}:[[:space:]]*[^[:space:]]" "$state" || true)" ;;
             esac
             if [[ "$state_key_count" -ne 1 ]]; then
@@ -1187,8 +1197,12 @@ validate_recorded_run_state() {
                     }
                 }
             }
+            function has_value(value) {
+                value=unquote(value)
+                return value != "" && value != "[]" && value != "null"
+            }
             function emit() {
-                if (job != "") print job "\t" parallel_safe "\t" scopes "\t" native_agent "\t" agent_instance "\t" review_agent_instance "\t" review_context "\t" review_status
+                if (job != "") print job "|" parallel_safe "|" scopes "|" native_agent "|" agent_instance "|" review_agent_instance "|" review_context "|" review_status "|" result_commit "|" verification_observed "|" verification_skipped_reason
             }
             $0 == "jobs:" { in_jobs=1; next }
             in_jobs && /^[^[:space:]]/ { emit(); in_jobs=0; exit }
@@ -1197,8 +1211,8 @@ validate_recorded_run_state() {
                 job=$0
                 sub(/^  /, "", job)
                 sub(/:$/, "", job)
-                parallel_safe=scopes=native_agent=agent_instance=review_agent_instance=review_context=review_status=""
-                reading_scope=0
+                parallel_safe=scopes=native_agent=agent_instance=review_agent_instance=review_context=review_status=result_commit=verification_observed=verification_skipped_reason=""
+                reading_scope=reading_verification=0
                 next
             }
             !in_jobs || job == "" { next }
@@ -1209,6 +1223,13 @@ validate_recorded_run_state() {
                 next
             }
             reading_scope { reading_scope=0 }
+            reading_verification && /^      -[[:space:]]*/ {
+                value=$0
+                sub(/^      -[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            reading_verification { reading_verification=0 }
             /^    allowed_scope:[[:space:]]*$/ { reading_scope=1; next }
             /^    allowed_scope:[[:space:]]*\[/ {
                 value=$0
@@ -1250,6 +1271,25 @@ validate_recorded_run_state() {
                 value=$0
                 sub(/^    review_status:[[:space:]]*/, "", value)
                 review_status=unquote(value)
+                next
+            }
+            /^    result_commit:[[:space:]]*/ {
+                value=$0
+                sub(/^    result_commit:[[:space:]]*/, "", value)
+                result_commit=unquote(value)
+                next
+            }
+            /^    verification_observed:[[:space:]]*$/ { reading_verification=1; next }
+            /^    verification_observed:[[:space:]]*/ {
+                value=$0
+                sub(/^    verification_observed:[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            /^    verification_skipped_reason:[[:space:]]*/ {
+                value=$0
+                sub(/^    verification_skipped_reason:[[:space:]]*/, "", value)
+                verification_skipped_reason=unquote(value)
             }
             END { if (in_jobs) emit() }
         ' "$state")"
@@ -1257,7 +1297,7 @@ validate_recorded_run_state() {
             log_error "Recorded run state has no job records: $state"
             errors=$((errors + 1))
         fi
-        scopes="$(printf '%s\n' "$job_records" | awk -F $'\t' '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
+        scopes="$(printf '%s\n' "$job_records" | awk -F '|' '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
         seen_scopes=""
         while IFS=$'\t' read -r scope_job scope_path; do
             [[ -n "$scope_job" && -n "$scope_path" ]] || continue
@@ -1274,7 +1314,7 @@ EOF
         done <<EOF
 $scopes
 EOF
-        while IFS=$'\t' read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status; do
+        while IFS='|' read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status result_commit verification_observed verification_skipped_reason; do
             [[ -n "$job" ]] || continue
             if [[ "$native_agent" != "" && "$native_agent" != null ]]; then
                 native_evidence=true
@@ -1284,9 +1324,100 @@ EOF
                 log_error "Approved native review lacks fresh reviewer identity/context: $state (job: $job)"
                 errors=$((errors + 1))
             fi
+            if [[ "$review_status" == approved && ( "$result_commit" == "" || "$result_commit" == null ) ]]; then
+                log_error "Approved review requires result_commit: $state (job: $job)"
+                errors=$((errors + 1))
+            fi
+            if [[ "$review_status" == approved && "$verification_observed" != observed &&
+                ( "$verification_skipped_reason" == "" || "$verification_skipped_reason" == null ) ]]; then
+                log_error "Approved review requires verification_observed or verification_skipped_reason: $state (job: $job)"
+                errors=$((errors + 1))
+            fi
         done <<EOF
 $job_records
 EOF
+        assembled_record="$(awk '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function unquote(value) {
+                value=trim(value)
+                if (value ~ /^".*"$/) value=substr(value, 2, length(value) - 2)
+                return value
+            }
+            function has_value(value) {
+                value=unquote(value)
+                return value != "" && value != "[]" && value != "null"
+            }
+            $0 == "assembled_review:" { in_review=1; next }
+            in_review && /^[^[:space:]]/ { exit }
+            !in_review { next }
+            reading_verification && /^    -[[:space:]]*/ {
+                value=$0
+                sub(/^    -[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            reading_verification { reading_verification=0 }
+            /^  integrated_commit:[[:space:]]*/ {
+                value=$0
+                sub(/^  integrated_commit:[[:space:]]*/, "", value)
+                integrated_commit=unquote(value)
+                next
+            }
+            /^  review_agent_instance:[[:space:]]*/ {
+                value=$0
+                sub(/^  review_agent_instance:[[:space:]]*/, "", value)
+                review_agent_instance=unquote(value)
+                next
+            }
+            /^  review_context:[[:space:]]*/ {
+                value=$0
+                sub(/^  review_context:[[:space:]]*/, "", value)
+                review_context=unquote(value)
+                next
+            }
+            /^  review_status:[[:space:]]*/ {
+                value=$0
+                sub(/^  review_status:[[:space:]]*/, "", value)
+                review_status=unquote(value)
+                next
+            }
+            /^  verification_observed:[[:space:]]*$/ { reading_verification=1; next }
+            /^  verification_observed:[[:space:]]*/ {
+                value=$0
+                sub(/^  verification_observed:[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            /^  verification_skipped_reason:[[:space:]]*/ {
+                value=$0
+                sub(/^  verification_skipped_reason:[[:space:]]*/, "", value)
+                verification_skipped_reason=unquote(value)
+            }
+            END { print integrated_commit "|" review_agent_instance "|" review_context "|" verification_observed "|" verification_skipped_reason "|" review_status }
+        ' "$state")"
+        IFS='|' read -r assembled_integrated_commit assembled_review_agent_instance assembled_review_context assembled_verification_observed assembled_verification_skipped_reason assembled_review_status <<EOF
+$assembled_record
+EOF
+        if [[ "$assembled_review_status" == approved ]]; then
+            if [[ "$fallback_used" != true &&
+                ( "$assembled_review_agent_instance" == "" || "$assembled_review_agent_instance" == null || "$assembled_review_context" != fresh ) ]]; then
+                log_error "Approved assembled review lacks fresh reviewer identity/context: $state"
+                errors=$((errors + 1))
+            fi
+            if [[ "$assembled_integrated_commit" == "" || "$assembled_integrated_commit" == null ]]; then
+                log_error "Approved assembled review requires integrated_commit: $state"
+                errors=$((errors + 1))
+            fi
+            if [[ "$assembled_verification_observed" != observed &&
+                ( "$assembled_verification_skipped_reason" == "" || "$assembled_verification_skipped_reason" == null ) ]]; then
+                log_error "Approved review requires verification_observed or verification_skipped_reason: $state (assembled_review)"
+                errors=$((errors + 1))
+            fi
+        fi
         if [[ "$parallel_claimed" == true && "$native_evidence" != true ]]; then
             log_error "Recorded parallel execution/delivery claim lacks native agent evidence: $state"
             errors=$((errors + 1))

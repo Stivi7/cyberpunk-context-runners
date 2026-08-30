@@ -161,9 +161,17 @@ jobs:
     review_agent_instance: codex-agent-c91b
     review_context: fresh
     verification_observed: []
+    verification_skipped_reason: null
     review_status: approved
     result_commit: def456
     merged: false
+assembled_review:
+  integrated_commit: fed789
+  review_agent_instance: codex-agent-d41e
+  review_context: fresh
+  verification_observed: []
+  verification_skipped_reason: manual environment unavailable
+  review_status: approved
 fallback:
   used: false
   category: null
@@ -173,7 +181,7 @@ fallback:
   delivery_impact: null
 ```
 
-Run state records observed execution rather than the plan. `native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. `review_context: fresh`, `result_commit`, and `verification_observed` are required evidence for an approved native review. These names are compatible with local recorded-state validation.
+Run state records observed execution rather than the plan. `native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. Every approved per-result review requires `review_context: fresh`, `result_commit`, and either non-empty `verification_observed` or an explicit `verification_skipped_reason`. Every run has one `assembled_review` tied to `integrated_commit`; an approved assembled review follows the same fresh-context and verification-evidence requirements. These names are compatible with local recorded-state validation.
 
 ## Sequential Fallback
 
@@ -187,7 +195,7 @@ Sequential fallback is allowed only in these five categories:
 
 The first three categories may perform safe roles in the parent context; the last two may use real subagents sequentially. Every fallback records its category, reason, observed evidence, affected jobs, and delivery impact. A full queue is capacity waiting, never fallback.
 
-For model rejection, Nexus retries once with `inherit`, records the preferred model, observed failure reason, and effective model. It prefers the same custom role with an explicit inherited model; if unavailable, it uses the runtime's built-in default worker with the complete canonical role and packet. Native registrations are never duplicated for fallback.
+For model rejection, Nexus retries once with `inherit`, records the preferred model, observed failure reason, and effective model. It prefers the same custom role with an explicit inherited model; if unavailable, it uses the runtime's built-in default worker with the complete canonical role and packet. There are no duplicate fallback agent files.
 
 ## Authority
 

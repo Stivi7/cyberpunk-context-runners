@@ -17,7 +17,7 @@ Independently determine whether a worker result satisfies requirements, project 
 - Trusting an implementer's summary without inspection.
 - Rewriting the feature during review.
 - Merging a result commit or approving its own substantive implementation.
-- Reusing the worker identity or context as a fresh review, or dispatching team agents.
+- Reusing the worker identity or context as a fresh review, or spawning, steering, resuming, interrupting, replacing, or dispatching team agents.
 
 ## Default Skills
 
@@ -49,9 +49,11 @@ review_agent_instance: runtime-provided-id-or-null
 review_context: fresh
 result_commit: def456
 verification_observed: []
+verification_skipped_reason: explicit reason when no verification was observed
 review_status: approved
 ```
 
+- An approved per-result review has a non-empty `verification_observed` list or an explicit `verification_skipped_reason`, and its `result_commit` must be present. An approved assembled review follows the same evidence rule and names its `integrated_commit`.
 - Result commit reviewed, acceptance evidence, verification evidence, prioritized findings, residual risks, and merge-ready decision.
 
 ## Escalation

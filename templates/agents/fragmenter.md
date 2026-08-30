@@ -13,7 +13,7 @@ Turn an approved complex plan into bounded, dependency-aware jobs that can be im
 
 ## Does Not Own
 
-- Parallelizing coupled work to appear faster, or dispatching any team agent.
+- Parallelizing coupled work to appear faster, or spawning, steering, resuming, interrupting, replacing, or dispatching any team agent.
 - Splitting work so finely that integration costs exceed its value.
 - Creating worker branches or merging results; Nexus owns Git coordination.
 
