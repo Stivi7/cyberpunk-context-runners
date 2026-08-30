@@ -15,6 +15,8 @@ LESSONS="$TEMPLATE_ROOT/.cyberpunk/memory/lessons.md"
 NEXUS="$TEMPLATE_ROOT/agents/nexus.md"
 COMMON_PRINCIPLES="$TEMPLATE_ROOT/agents/_common-principles.md"
 WORKTREE_SKILL="$TEMPLATE_ROOT/skills/core/worktree-isolation/SKILL.md"
+DECOMPOSITION_SKILL="$TEMPLATE_ROOT/skills/core/task-decomposition/SKILL.md"
+REVIEW_SKILL="$TEMPLATE_ROOT/skills/core/code-review/SKILL.md"
 
 test_start "canonical protocol files exist"
 assert_file "$CONFIG"
@@ -83,6 +85,67 @@ for heading in \
     "## Result Contract" \
     "## Run State"; do
     assert_contains "$workflow_content" "$heading" "workflow stage"
+done
+
+test_start "canonical workflow records sole native dispatch and observed execution"
+for value in \
+    "Nexus is the only component allowed to spawn" \
+    "dependency-ready" \
+    "ready queue" \
+    "parallel_safe" \
+    "max_concurrent_agents" \
+    "three active subagents" \
+    "full queue" \
+    "fresh Gatekeeper" \
+    "assembled-change review" \
+    "model_preferred" \
+    "model_effective" \
+    "model_fallback_reason" \
+    "native agent evidence" \
+    "roles performed in the parent context"; do
+    assert_contains "$workflow_content" "$value" "native dispatch and observed execution"
+done
+for value in \
+    "integration_owner: null" \
+    "integration_contract: null" \
+    "allowed_scope:" \
+    "review_agent_instance:" \
+    "review_context: fresh" \
+    "verification_observed:" \
+    "execution_status:" \
+    "fallback:" \
+    "observed_evidence:" \
+    "affected_jobs:" \
+    "delivery_impact:"; do
+    assert_contains "$workflow_content" "$value" "run-state evidence schema"
+done
+
+test_start "work packets and skills enforce safe native isolation and fresh review"
+for value in \
+    "parallel_safe: true" \
+    "dependencies: []" \
+    "allowed_scope:" \
+    "integration_owner: null" \
+    "integration_contract: null" \
+    "required_skills: []" \
+    "model_profile: balanced" \
+    "worktree isolation does not make overlapping ownership safe"; do
+    assert_contains "$workflow_content" "$value" "work packet contract"
+done
+
+decomposition_skill="$(<"$DECOMPOSITION_SKILL")"
+for value in "parallel_safe" "dependencies" "allowed_scope" "integration owner" "integration contract" "required skills" "model profile"; do
+    assert_contains "$decomposition_skill" "$value" "decomposition packet contract"
+done
+
+worktree_skill="$(<"$WORKTREE_SKILL")"
+for value in "native runtime" "worker branch" "base commit" "allowed scope" "integration contract"; do
+    assert_contains "$worktree_skill" "$value" "native worktree evidence"
+done
+
+review_skill="$(<"$REVIEW_SKILL")"
+for value in "review_agent_instance" "review_context: fresh" "result_commit" "verification_observed" "runtime-provided"; do
+    assert_contains "$review_skill" "$value" "fresh review evidence"
 done
 for value in \
     "cyberpunk/<task-id>-<slug>" \

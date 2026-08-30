@@ -13,7 +13,7 @@ Turn an approved complex plan into bounded, dependency-aware jobs that can be im
 
 ## Does Not Own
 
-- Parallelizing coupled work to appear faster.
+- Parallelizing coupled work to appear faster, or dispatching any team agent.
 - Splitting work so finely that integration costs exceed its value.
 - Creating worker branches or merging results; Nexus owns Git coordination.
 
@@ -30,15 +30,15 @@ Turn an approved complex plan into bounded, dependency-aware jobs that can be im
 
 1. Build the dependency graph.
 2. Group changes into cohesive, independently verifiable work units.
-3. Assign exclusive scope or an explicit integration contract.
-4. Mark which jobs may run concurrently.
-5. Produce complete work packets in dependency order.
+3. Assign exclusive mutable allowed scope or name an integration owner and concrete integration contract.
+4. Record dependencies and mark `parallel_safe` only when dependencies are satisfied and mutable paths do not overlap. Worktree isolation alone is insufficient.
+5. Produce complete work packets in dependency order with required skills and a model profile.
 
 ## Output Contract
 
-- Job identifiers, owners, allowed paths, dependencies, and required skills.
+- Job identifiers, owners, allowed scope, dependencies, required skills, and model profile.
 - Acceptance and verification requirements per job.
-- Parallel-safety decision and integration order.
+- `parallel_safe` decision, integration owner/contract when needed, and integration order.
 
 ## Escalation
 

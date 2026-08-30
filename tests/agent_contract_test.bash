@@ -31,8 +31,19 @@ done
 
 test_start "Nexus owns adaptive integration-branch delivery"
 nexus="$(<"$AGENT_ROOT/nexus.md")"
-for value in "adaptive" "integration branch" "dependency order" "worktree" "cleanup" "delivery"; do
+for value in "adaptive" "integration branch" "dependency order" "worktree" "cleanup" "delivery" "spawn" "resume" "steer" "interrupt" "replace" "ready queue" "three active subagents" "fresh Gatekeeper" "assembled-change review"; do
     assert_contains "$nexus" "$value" "Nexus responsibility"
+done
+
+test_start "Nexus alone delegates and all other roles reject nested team delegation"
+common="$(<"$AGENT_ROOT/_common-principles.md")"
+for value in "## Native Delegation" "only dispatcher" "never spawn" "steer" "resume" "interrupt" "replace" "fresh-context" "not inherited" "sequential fallback"; do
+    assert_contains "$common" "$value" "common native delegation rule"
+done
+for agent in "${agents[@]}"; do
+    [[ "$agent" == nexus ]] && continue
+    content="$(<"$AGENT_ROOT/$agent.md")"
+    assert_contains "$content" "./_common-principles.md" "$agent must inherit the nested delegation prohibition"
 done
 
 test_start "Coder is a shared contract with backend and frontend specialists"
@@ -42,12 +53,13 @@ assert_contains "$(<"$AGENT_ROOT/neon.md")" "frontend engineer"
 
 test_start "parallel work and review have independent safeguards"
 fragmenter="$(<"$AGENT_ROOT/fragmenter.md")"
-assert_contains "$fragmenter" "non-overlapping"
-assert_contains "$fragmenter" "integration contract"
+for value in "non-overlapping" "integration contract" "dependencies" "allowed scope" "parallel_safe" "integration owner" "required skills" "model profile"; do
+    assert_contains "$fragmenter" "$value" "Fragmenter packet safeguard"
+done
 gatekeeper="$(<"$AGENT_ROOT/gatekeeper.md")"
-assert_contains "$gatekeeper" "independently"
-assert_contains "$gatekeeper" "rerun"
-assert_contains "$gatekeeper" "result commit"
+for value in "independently" "rerun" "result commit" "fresh" "review_agent_instance" "review_context: fresh" "verification_observed" "review_status: approved" "assembled"; do
+    assert_contains "$gatekeeper" "$value" "Gatekeeper fresh review safeguard"
+done
 
 test_start "Fixer owns approved PRD creation and handoff gates"
 fixer="$(<"$AGENT_ROOT/fixer.md")"

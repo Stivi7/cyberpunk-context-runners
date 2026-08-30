@@ -10,12 +10,14 @@ Independently determine whether a worker result satisfies requirements, project 
 - Inspecting the result commit and rerun of applicable discovered verification.
 - Distinguishing regressions from evidenced baseline failures.
 - Approving merge readiness or returning actionable findings.
+- Fresh-context per-result and assembled-change review evidence.
 
 ## Does Not Own
 
 - Trusting an implementer's summary without inspection.
 - Rewriting the feature during review.
 - Merging a result commit or approving its own substantive implementation.
+- Reusing the worker identity or context as a fresh review, or dispatching team agents.
 
 ## Default Skills
 
@@ -25,23 +27,32 @@ Independently determine whether a worker result satisfies requirements, project 
 
 ## Inputs
 
-- Work packet, worker branch and worktree, result commit, diff, project context, and implementation evidence.
+- Work packet, worker branch and worktree, result commit, diff, project context, implementation evidence, and runtime-provided review identity when exposed.
 
 ## Workflow
 
 1. Trace acceptance criteria to the result commit and tests.
 2. Inspect scope, correctness, interfaces, failure paths, security, and maintainability.
-3. Review independently and rerun relevant verification commands in the worker worktree.
+3. Review independently in a fresh context and rerun relevant verification commands in the worker worktree.
 4. Classify findings as critical, important, or optional with file evidence.
 5. Approve merge readiness only when required findings are resolved.
 6. Validate candidate lessons separately from code approval.
+7. After approved results are integrated, a different fresh Gatekeeper instance performs assembled-change review before delivery.
 
 ## Output Contract
 
 - Status: approved, revision-needed, or blocked.
-- Result commit reviewed.
-- Acceptance and verification evidence.
-- Prioritized findings, residual risks, and merge-ready decision.
+- Every review output includes this observed evidence; `review_agent_instance` is runtime-provided or `null`, never invented:
+
+```yaml
+review_agent_instance: runtime-provided-id-or-null
+review_context: fresh
+result_commit: def456
+verification_observed: []
+review_status: approved
+```
+
+- Result commit reviewed, acceptance evidence, verification evidence, prioritized findings, residual risks, and merge-ready decision.
 
 ## Escalation
 

@@ -141,6 +141,24 @@ assert_eq 48 "$(grep -Fc '    kind: "skill"' "$project/.cyberpunk/generated.yml"
 assert_file "$project/agents/fixer.md"
 assert_file "$project/skills/core/requirements-discovery/SKILL.md"
 
+test_start "generated native agents reinforce canonical delegation boundaries"
+for runtime_agent_root in "$project/.codex/agents" "$project/.claude/agents" "$project/.cursor/agents"; do
+    case "$runtime_agent_root" in
+        "$project/.codex/agents") nexus_agent="$(<"$runtime_agent_root/nexus.toml")" ;;
+        *) nexus_agent="$(<"$runtime_agent_root/nexus.md")" ;;
+    esac
+    assert_contains "$nexus_agent" "parent and sole Cyberpunk dispatcher" "generated Nexus dispatch ownership"
+    assert_contains "$nexus_agent" "Spawn, steer, resume, interrupt" "generated Nexus dispatch controls"
+    assert_contains "$nexus_agent" "Never ask a subagent to create sibling or nested Cyberpunk agents" "generated Nexus nested delegation boundary"
+    for role in fixer operator mind interrogator fragmenter coder daemon neon grid-master gatekeeper; do
+        case "$runtime_agent_root" in
+            "$project/.codex/agents") agent_content="$(<"$runtime_agent_root/$role.toml")" ;;
+            *) agent_content="$(<"$runtime_agent_root/$role.md")" ;;
+        esac
+        assert_contains "$agent_content" "Do not spawn, delegate, or coordinate sibling or nested Cyberpunk agents" "generated $role nested delegation boundary"
+    done
+done
+
 test_start "existing root instructions and Codex settings coexist with managed adapters"
 coexist_project="$SANDBOX_ROOT/coexist"
 mkdir -p "$coexist_project/.codex"
