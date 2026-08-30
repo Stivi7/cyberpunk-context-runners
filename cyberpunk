@@ -914,6 +914,7 @@ validate_skill_frontmatter() {
 
 validate_managed_instruction_block() {
     local path="$1"
+    local canonical="$2"
     local start_count
     local end_count
     local start_line
@@ -931,6 +932,10 @@ validate_managed_instruction_block() {
         log_error "Malformed managed instruction block: $path"
         return 1
     fi
+    if ! cmp -s <(sed -n "${start_line},${end_line}p" "$path") "$canonical"; then
+        log_error "Managed instruction block differs from canonical content: $path"
+        return 1
+    fi
 }
 
 validate_native_skill_wrapper() {
@@ -938,23 +943,19 @@ validate_native_skill_wrapper() {
     local name="$2"
     local description_yaml="$3"
     local source="$4"
-    local failures=0
-    local content
+    local expected
 
-    content="$(<"$path")"
-    if [[ "$content" != *"name: \"$name\""* ]]; then
-        log_error "Native skill wrapper has wrong canonical name: $path (expected: $name)"
-        failures=$((failures + 1))
+    expected="$(mktemp "${TMPDIR:-/tmp}/cyberpunk-validate-skill.XXXXXX")" || return 1
+    if ! render_native_skill "$source" "$name" "$description_yaml" "$expected"; then
+        rm -f "$expected" || true
+        return 1
     fi
-    if [[ "$content" != *"description: $description_yaml"* ]]; then
-        log_error "Native skill wrapper has wrong canonical description: $path"
-        failures=$((failures + 1))
+    if ! cmp -s "$path" "$expected"; then
+        log_error "Native skill wrapper differs from canonical registration: $path (expected source: ../../../$source)"
+        rm -f "$expected" || true
+        return 1
     fi
-    if [[ "$content" != *"../../../$source"* ]]; then
-        log_error "Native skill wrapper has wrong canonical source pointer: $path (expected: ../../../$source)"
-        failures=$((failures + 1))
-    fi
-    [[ "$failures" -eq 0 ]]
+    rm -f "$expected"
 }
 
 validate_expected_generated_asset() {
@@ -1047,10 +1048,10 @@ validate_generated_runtime_state() {
         done
         case "$runtime" in
             codex)
-                [[ -f AGENTS.md ]] && validate_managed_instruction_block AGENTS.md || errors=$((errors + 1))
+                [[ -f AGENTS.md ]] && validate_managed_instruction_block AGENTS.md "$TEMPLATES_DIR/AGENTS.md" || errors=$((errors + 1))
                 ;;
             claude)
-                [[ -f CLAUDE.md ]] && validate_managed_instruction_block CLAUDE.md || errors=$((errors + 1))
+                [[ -f CLAUDE.md ]] && validate_managed_instruction_block CLAUDE.md "$TEMPLATES_DIR/CLAUDE.md" || errors=$((errors + 1))
                 ;;
             cursor)
                 validate_expected_generated_asset "$records" ".cursor/rules/cyberpunk.mdc" ".cyberpunk/workflow.md" cursor adapter cyberpunk || errors=$((errors + 1))
@@ -1061,6 +1062,26 @@ validate_generated_runtime_state() {
     rm -f "$records" || true
     rmdir "$validation_dir" 2>/dev/null || true
     [[ "$errors" -eq 0 ]]
+}
+
+mutable_scopes_overlap() {
+    local left="$1"
+    local right="$2"
+    local left_root="$left"
+    local right_root="$right"
+
+    [[ -n "$left" && -n "$right" ]] || return 1
+    [[ "$left" == "$right" ]] && return 0
+    case "$left" in *'*'*) ;; *) left_root="$left" ;; esac
+    case "$right" in *'*'*) ;; *) right_root="$right" ;; esac
+    left_root="${left_root%/**}"
+    right_root="${right_root%/**}"
+    left_root="${left_root%/}"
+    right_root="${right_root%/}"
+    [[ -n "$left_root" && -n "$right_root" ]] || return 0
+    [[ "$left_root" == "$right_root" || "$left_root" == "$right_root"/* || "$right_root" == "$left_root"/* ]] && return 0
+    case "$left$right" in *'*'* ) return 0 ;; esac
+    return 1
 }
 
 validate_recorded_run_state() {
@@ -1080,11 +1101,28 @@ validate_recorded_run_state() {
     local native_evidence=false
     local parallel_claimed=false
     local duplicate_scope
+    local prior_job
+    local prior_scope
+    local scope_job
+    local scope_path
+    local state_records
+    local seen_scopes=""
     local errors=0
 
     [[ -d .cyberpunk/runs ]] || return 0
     while IFS= read -r state; do
         native_evidence=false
+        if [[ ! -s "$state" ]]; then
+            log_error "Recorded run state is empty: $state"
+            errors=$((errors + 1))
+            continue
+        fi
+        for state_records in runtime execution_mode max_concurrent_agents jobs fallback; do
+            if [[ "$(grep -Fxc "${state_records}:" "$state")" -ne 1 ]]; then
+                log_error "Recorded run state requires exactly one ${state_records} section/key: $state"
+                errors=$((errors + 1))
+            fi
+        done
         maximum="$(sed -n 's/^max_concurrent_agents:[[:space:]]*//p' "$state" | head -n 1)"
         if [[ -n "$maximum" && ( ! "$maximum" =~ ^[0-9]+$ || "$maximum" -lt 1 || "$maximum" -gt 3 ) ]]; then
             log_error "Recorded run max_concurrent_agents must be an integer from 1 to 3: $state"
@@ -1101,6 +1139,10 @@ validate_recorded_run_state() {
                 exit
             }
         ' "$state")"
+        if [[ "$(awk '$0 == "fallback:" { section++ } section == 1 && /^  used:[[:space:]]*/ { count++ } END { print count + 0 }' "$state")" -ne 1 ]]; then
+            log_error "Recorded run state requires exactly one fallback.used value: $state"
+            errors=$((errors + 1))
+        fi
         if [[ "$execution_mode" == parallel ]] ||
             grep -Eq '^[[:space:]]*(parallel_execution_claimed|parallel_delivery_claimed|delivery_parallel):[[:space:]]*true[[:space:]]*$' "$state"; then
             parallel_claimed=true
@@ -1200,19 +1242,34 @@ validate_recorded_run_state() {
             }
             END { if (in_jobs) emit() }
         ' "$state")"
-        scopes="$(printf '%s\n' "$job_records" | awk -F $'\t' '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
-        duplicate_scope="$(printf '%s\n' "$scopes" | awk -F $'\t' 'NF == 2 && seen[$2] != "" && seen[$2] != $1 { print $2; exit } { seen[$2]=$1 }')"
-        if [[ -n "$duplicate_scope" ]]; then
-            log_error "Recorded parallel-safe jobs overlap mutable scope: $duplicate_scope ($state)"
+        if [[ -z "$job_records" ]]; then
+            log_error "Recorded run state has no job records: $state"
             errors=$((errors + 1))
         fi
+        scopes="$(printf '%s\n' "$job_records" | awk -F $'\t' '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
+        seen_scopes=""
+        while IFS=$'\t' read -r scope_job scope_path; do
+            [[ -n "$scope_job" && -n "$scope_path" ]] || continue
+            while IFS=$'\t' read -r prior_job prior_scope; do
+                [[ -n "$prior_job" && "$prior_job" != "$scope_job" ]] || continue
+                if mutable_scopes_overlap "$prior_scope" "$scope_path"; then
+                    log_error "Recorded parallel-safe jobs overlap mutable scope: $prior_scope and $scope_path ($state)"
+                    errors=$((errors + 1))
+                fi
+            done <<EOF
+$seen_scopes
+EOF
+            seen_scopes="${seen_scopes}${scope_job}"$'\t'"${scope_path}"$'\n'
+        done <<EOF
+$scopes
+EOF
         while IFS=$'\t' read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status; do
             [[ -n "$job" ]] || continue
             if [[ "$native_agent" != "" && "$native_agent" != null ]]; then
                 native_evidence=true
             fi
             if [[ "$review_status" == approved && "$fallback_used" != true &&
-                ( "$review_agent_instance" == "" || "$review_agent_instance" == null || "$review_context" != fresh ) ]]; then
+                ( "$review_agent_instance" == "" || "$review_agent_instance" == null || "$review_context" != fresh || "$review_agent_instance" == "$agent_instance" ) ]]; then
                 log_error "Approved native review lacks fresh reviewer identity/context: $state (job: $job)"
                 errors=$((errors + 1))
             fi
