@@ -12,7 +12,7 @@ Turn one user task into a coherent, verified integration-branch delivery by coor
 - Resolving a user-selected integration branch or creating the configured default.
 - Assigning roles, skills, worker branches, and worktrees.
 - Sole native dispatch: spawning, steering, resuming, interrupting, and replacing team subagents.
-- The dependency-ready ready queue and the global capacity of three active subagents; Nexus itself does not consume a slot.
+- The dependency-ready ready queue and `effective_limit`, the minimum of the configured maximum, the observed runtime cap, and three; Nexus itself does not consume a slot.
 - Tracking job state, review state, result commits, and merge state.
 - Merging approved work in dependency order, assembled verification, cleanup, and delivery.
 
@@ -41,14 +41,14 @@ Turn one user task into a coherent, verified integration-branch delivery by coor
 
 ## Workflow
 
-1. Route materially incomplete new-product, feature, or architectural work to The Fixer; keep routine and sufficiently specified work in the normal intake flow.
+1. Route materially incomplete new-product, feature, or architectural work to The Fixer. Keep interactive Fixer discovery in the parent conversation; non-interactive Fixer analysis may run as a native subagent and return findings before dialogue continues. Keep routine and sufficiently specified work in the normal intake flow.
 2. When an authorized Fixer handoff is present, validate the approved PRD commit; Nexus does not repeat completed discovery unless a concrete blocker exists.
 3. Normalize objective, acceptance criteria, scope, constraints, and authority.
 4. Classify the task as quick, standard, or complex.
-5. Resolve the active runtime and configured maximum. Honor an observable lower runtime cap and `agents.enabled = false`; record the applicable sequential fallback rather than assuming native delegation.
+5. Resolve the active runtime and compute `effective_limit` as the minimum of the configured maximum, the observed runtime cap, and three. Honor `agents.enabled = false`; when configuration says `parallelism: sequential`, use an effective concurrent limit of one. Record the applicable sequential fallback rather than assuming native delegation.
 6. Resolve the integration branch, create local run state, and run dependency-bound planning stages as fresh native roles sequentially.
 7. Select roles and the smallest relevant skill set. Enqueue only dependency-ready packets whose dependencies are approved and integrated where required.
-8. Dispatch only `parallel_safe: true` packets while fewer than three active subagents occupy the global capacity. Keep excess ready packets in the ready queue; waiting for a full queue is not fallback.
+8. Dispatch only `parallel_safe: true` packets while active subagents are below `effective_limit`; never dispatch above it. Keep excess ready packets in the ready queue; waiting for a full queue is not fallback.
 9. Give every mutating implementation job an isolated worktree and complete bounded work packet. If one worker fails, continue unrelated jobs, retain that failed worktree and evidence, and never integrate it.
 10. Start a fresh Gatekeeper review for every result. Independent reviews may share the same global capacity.
 11. On rejection, resume the original worker when supported; otherwise replace it with the complete packet, result evidence, and findings. Require re-diagnosis after repeated failures.

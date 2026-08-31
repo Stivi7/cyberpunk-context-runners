@@ -17,6 +17,21 @@ run_cli() {
 write_run_state() {
     local name="$1"
     mkdir -p "$project/.cyberpunk/runs/$name"
+    {
+        printf '%s\n' 'schema_version: 2'
+        cat
+    } > "$project/.cyberpunk/runs/$name/state.yml"
+}
+
+write_legacy_run_yml() {
+    local name="$1"
+    mkdir -p "$project/.cyberpunk/runs/$name"
+    cat > "$project/.cyberpunk/runs/$name/run.yml"
+}
+
+write_legacy_state() {
+    local name="$1"
+    mkdir -p "$project/.cyberpunk/runs/$name"
     cat > "$project/.cyberpunk/runs/$name/state.yml"
 }
 
@@ -27,7 +42,7 @@ git -C "$project" init -q
 assert_exit 0 run_cli "$project" init
 assert_exit 0 run_cli "$project" validate
 
-write_run_state legacy-run-record <<'EOF'
+write_legacy_run_yml legacy-run-record <<'EOF'
 runtime: codex
 execution_mode: sequential
 max_concurrent_agents: 1
@@ -45,9 +60,41 @@ jobs:
 fallback:
   used: false
 EOF
-mv "$project/.cyberpunk/runs/legacy-run-record/state.yml" "$project/.cyberpunk/runs/legacy-run-record/run.yml"
 assert_exit 0 run_cli "$project" validate
 rm -rf "$project/.cyberpunk/runs/legacy-run-record"
+
+write_legacy_state pre-0-4-state <<'EOF'
+integration_branch: cyberpunk/TASK-014-session-renewal
+base_commit: abc123
+jobs:
+  backend:
+    agent: daemon
+    branch: cyberpunk/TASK-014/daemon-session-api
+    worktree: .worktrees/TASK-014/daemon-session-api
+    status: verified
+    result_commit: def456
+    review_status: approved
+    merged: false
+EOF
+assert_exit 0 run_cli "$project" validate
+rm -rf "$project/.cyberpunk/runs/pre-0-4-state"
+
+write_legacy_state unversioned-current-state <<'EOF'
+runtime: codex
+execution_mode: sequential
+max_concurrent_agents: 1
+jobs:
+  frontend:
+    native_agent: neon
+    parallel_safe: false
+    allowed_scope: [src/frontend/**]
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Current state.yml requires schema_version: 2"
+rm -rf "$project/.cyberpunk/runs/unversioned-current-state"
 
 write_run_state reused-assembled-reviewer <<'EOF'
 runtime: codex
@@ -133,6 +180,37 @@ assert_contains "$COMMAND_OUTPUT" "Generated assets: synchronized"
 assert_not_contains "$COMMAND_OUTPUT" "parallel agents available"
 assert_eq "$before" "$(cksum "$project/.cyberpunk/generated.yml")" "status changed generated state"
 assert_eq "$git_before" "$(git -C "$project" status --porcelain)" "status changed the project"
+
+test_start "validation compares native agents and Cursor adapter with current renderer output"
+cp "$project/.cyberpunk/config.yml" "$project/config.rendered.yml"
+sed 's/      codex: "gpt-5.6-sol"/      codex: "render-drift-model"/' \
+    "$project/config.rendered.yml" > "$project/.cyberpunk/config.yml"
+generated_before_model_drift="$(cksum "$project/.codex/agents/fixer.toml")"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Native agent differs from current configuration: .codex/agents/fixer.toml"
+assert_exit 0 run_cli "$project" status
+assert_contains "$COMMAND_OUTPUT" "Generated assets: drift detected"
+assert_eq "$generated_before_model_drift" "$(cksum "$project/.codex/agents/fixer.toml")" "validation rewrote a stale native agent"
+cp "$project/config.rendered.yml" "$project/.cyberpunk/config.yml"
+
+cursor_adapter="$project/.cursor/rules/cyberpunk.mdc"
+printf '%s\n' 'renderer-owned-drift' >> "$cursor_adapter"
+if command -v shasum >/dev/null 2>&1; then
+    cursor_hash="$(shasum -a 256 "$cursor_adapter" | awk '{ print $1 }')"
+else
+    cursor_hash="$(sha256sum "$cursor_adapter" | awk '{ print $1 }')"
+fi
+awk -v expected_path='  - path: ".cursor/rules/cyberpunk.mdc"' -v hash="$cursor_hash" '
+    $0 == expected_path { in_record=1 }
+    in_record && /^    sha256: / { print "    sha256: \"" hash "\""; in_record=0; next }
+    { print }
+' "$project/.cyberpunk/generated.yml" > "$project/manifest.rendered.yml"
+mv "$project/manifest.rendered.yml" "$project/.cyberpunk/generated.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Cursor adapter differs from current renderer: .cursor/rules/cyberpunk.mdc"
+assert_exit 0 run_cli "$project" sync --force
 
 test_start "validation rejects exact managed-block and skill-wrapper corruption without writing"
 sed "s/and use the active runtime's native Cyberpunk agents and skills\. Dispatch/and use drifted native Cyberpunk agents and skills. Dispatch/" \
@@ -481,6 +559,106 @@ fallback:
 EOF
 assert_exit 0 run_cli "$project" validate
 rm -rf "$project/.cyberpunk/runs/sibling-scopes"
+
+write_run_state normalized-alias-overlap <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  broad:
+    native_agent: neon
+    parallel_safe: true
+    allowed_scope: [./src//shared/**]
+  narrow:
+    native_agent: daemon
+    parallel_safe: true
+    allowed_scope: [src/shared/file.md]
+assembled_review:
+  review_status: pending
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Recorded parallel-safe jobs overlap mutable scope: src/shared/** and src/shared/file.md"
+rm -rf "$project/.cyberpunk/runs/normalized-alias-overlap"
+
+for invalid_scope in '/absolute/path' 'src/../escape' 'src/*.js' 'src/file?.js' 'src/[ab].js'; do
+    write_run_state invalid-scope <<EOF
+runtime: codex
+execution_mode: sequential
+max_concurrent_agents: 1
+jobs:
+  invalid:
+    native_agent: neon
+    parallel_safe: false
+    allowed_scope: [$invalid_scope]
+assembled_review:
+  review_status: pending
+fallback:
+  used: false
+EOF
+    capture run_cli "$project" validate
+    assert_eq 1 "$COMMAND_STATUS"
+    assert_contains "$COMMAND_OUTPUT" "Recorded allowed_scope is not a supported project-relative path"
+    rm -rf "$project/.cyberpunk/runs/invalid-scope"
+done
+
+write_run_state normalized-siblings <<'EOF'
+runtime: codex
+execution_mode: sequential
+max_concurrent_agents: 1
+jobs:
+  alpha:
+    native_agent: neon
+    parallel_safe: true
+    allowed_scope: [./src//a/**]
+  beta:
+    native_agent: daemon
+    parallel_safe: true
+    allowed_scope: [src/b/**]
+assembled_review:
+  review_status: pending
+fallback:
+  used: false
+EOF
+assert_exit 0 run_cli "$project" validate
+rm -rf "$project/.cyberpunk/runs/normalized-siblings"
+
+write_run_state parent-fallback-review <<'EOF'
+runtime: codex
+execution_mode: sequential
+max_concurrent_agents: 1
+jobs:
+  fallback:
+    native_agent: null
+    agent_instance: null
+    parallel_safe: false
+    allowed_scope: [src/fallback/**]
+    review_agent_instance: null
+    review_context: parent
+    verification_observed: [bash tests/fallback.bash]
+    review_status: approved
+    result_commit: fallback456
+assembled_review:
+  integrated_commit: fallback456
+  review_agent_instance: null
+  review_context: parent
+  verification_observed: [bash tests/assembled.bash]
+  review_status: approved
+fallback:
+  used: true
+  category: native_tools_unavailable
+  affected_jobs: [all]
+EOF
+assert_exit 0 run_cli "$project" validate
+sed 's/review_context: parent/review_context: stale/' \
+    "$project/.cyberpunk/runs/parent-fallback-review/state.yml" > "$project/parent-fallback.tmp"
+mv "$project/parent-fallback.tmp" "$project/.cyberpunk/runs/parent-fallback-review/state.yml"
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Approved parent-session fallback review requires null identity and parent context"
+rm -rf "$project/.cyberpunk/runs/parent-fallback-review"
 
 mkdir -p "$project/.cyberpunk/runs/empty"
 : > "$project/.cyberpunk/runs/empty/state.yml"

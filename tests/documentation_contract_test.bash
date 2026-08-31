@@ -75,6 +75,13 @@ for value in \
     "full queue waits" \
     "modified generated files require" \
     "migration is idempotent" \
+    "reviewed canonical-protocol upgrade" \
+    "interactive Fixer discovery" \
+    "parent conversation" \
+    "non-interactive Fixer analysis" \
+    "parallelism: sequential" \
+    "configured maximum, the observed runtime cap, and three" \
+    "review_context: parent" \
     "does not prove live capability"; do
     assert_contains "$documentation" "$value" "runtime-native documentation contract"
 done

@@ -42,6 +42,8 @@ Act as The Fixer. Help me define account recovery before implementation planning
 
 Nexus also routes materially incomplete product work to The Fixer. The Fixer uses `requirements-discovery`, asks one focused question at a time, and writes an approved PRD to `specs/YYYY-MM-DD-<topic>-prd.md`. After the user reviews the file, The Fixer commits only that PRD on the current named branch and asks whether to hand it to Nexus.
 
+Keep interactive Fixer discovery in the parent conversation so questions and approvals remain with the user. Keep non-interactive Fixer analysis eligible for a native subagent that returns its findings before dialogue continues.
+
 The runtime adapter loads `.cyberpunk/workflow.md`, then Nexus selects only the roles and skills required for the task.
 
 ## Adaptive Workflow
@@ -76,9 +78,9 @@ Direct role invocation remains available for focused work, but Nexus is the reco
 
 ## Native Dispatch, Models, and Worktrees
 
-Nexus is the parent and sole dispatcher. At most three active subagents run at once; Nexus is excluded. Only dependency-ready, ownership-safe packets may run concurrently: dependency-bound roles remain sequential, and a full queue waits for capacity rather than being described as fallback.
+Nexus is the parent and sole dispatcher. Its effective limit is the minimum of the configured maximum, the observed runtime cap, and three; Nexus is excluded. With `parallelism: sequential`, that limit is one. Only dependency-ready, ownership-safe packets may run concurrently: dependency-bound roles remain sequential, and a full queue waits for capacity rather than being described as fallback.
 
-Every mutating packet still receives a recorded branch and worktree. Worktree isolation does not start agents or create concurrency; it only separates approved changes. Gatekeeper uses fresh context before integration and again for the assembled change.
+Every mutating packet still receives a recorded branch and worktree. Worktree isolation does not start agents or create concurrency; it only separates approved changes. Gatekeeper uses fresh context before integration and again for the assembled change when native delegation is available. A parent-session fallback records `review_agent_instance: null` and `review_context: parent` rather than claiming a fresh agent.
 
 The configured model profiles map deep, balanced, and fast roles to each runtime. A runtime may reject a preferred model; Nexus records that observation and retries once with `inherit`. Configuration is intent, not evidence: actual native-agent identity, preferred/effective model, fallback reason, execution mode, reviews, and verification belong in local run state and delivery reporting. `status` does not prove live capability.
 
@@ -130,7 +132,7 @@ The Operator discovers the project's real setup, formatting, linting, static ana
 
 Native adapters are generated for the selected runtimes. The canonical `agents/`, `skills/`, and `.cyberpunk/` files remain the behavioral source of truth; generated adapters only point back to them. Bounded Cyberpunk-managed blocks are added to `AGENTS.md` and `CLAUDE.md`, preserving text outside the markers. Cursor owns `.cursor/rules/cyberpunk.mdc`.
 
-Generated paths and hashes are recorded in `.cyberpunk/generated.yml`. `sync` reports a collision at an unowned native path and detects locally modified generated files as drift; modified generated files require `--force` to replace them. Version-1 configuration migrates to version 2 during `sync`; the migration is idempotent and preserves existing project-owned settings. Enable project-owned skills explicitly in `skills.enabled_project` before they receive native wrappers.
+Generated paths and hashes are recorded in `.cyberpunk/generated.yml`. `sync` reports a collision at an unowned native path and detects locally modified generated files as drift; modified generated files require `--force` to replace them. Version-1 configuration migration is idempotent and preserves existing project-owned settings. A stale version-1 canonical workflow, roles, or skills requires a reviewed canonical-protocol upgrade before `sync` generates version-2 registrations; ordinary sync preserves those policy files and reports the review command. Enable project-owned skills explicitly in `skills.enabled_project` before they receive native wrappers.
 
 ## Generated Structure
 

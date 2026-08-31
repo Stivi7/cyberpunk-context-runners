@@ -27,6 +27,8 @@ Do not deploy, push, open pull requests, contact external parties, destroy data,
 - Every fresh-context handoff carries the complete work packet, result evidence, findings, and required skills because conversational context is not inherited.
 - Record the actual runtime, native-agent identity, execution mode, preferred and effective model, and fallback reason as evidence, never as assumptions.
 - If native delegation is missing or disabled, record an explicit sequential fallback. Do not simulate concurrency or claim separate native agents; identify roles performed in the parent context.
+- Keep interactive Fixer discovery in the parent conversation, and keep non-interactive Fixer analysis eligible for a native subagent only when it needs no user dialogue.
+- Fresh Gatekeeper identity and context are required when native delegation is used. A parent-session fallback records a `null` reviewer identity and `review_context: parent` instead of claiming fresh native review.
 
 ## Scope
 

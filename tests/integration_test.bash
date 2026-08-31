@@ -115,6 +115,18 @@ project_owned:
 EOF
 }
 
+write_baseline_v1_scaffold() {
+    local target="$1"
+    local template_path
+    local destination
+
+    while IFS= read -r template_path; do
+        destination="$target/${template_path#templates/}"
+        mkdir -p "$(dirname "$destination")"
+        git -C "$REPO_ROOT" show "814011c:$template_path" > "$destination"
+    done < <(git -C "$REPO_ROOT" ls-tree -r --name-only 814011c templates)
+}
+
 section_text() {
     local config="$1"
     local section="$2"
@@ -180,6 +192,22 @@ assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'runtime: "cur
 assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'kind: "adapter"'
 assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'identifier: "cyberpunk"'
 grep -Eq 'sha256: "[0-9a-f]{64}"' "$coexist_project/.cyberpunk/generated.yml" || fail "manifest lacks a SHA-256 record"
+
+test_start "runtime destinations reject symlinked project parents without external mutation"
+for escaped_root in .codex .agents; do
+    escaped_name="${escaped_root#.}"
+    escaped_project="$SANDBOX_ROOT/escaped-$escaped_name-project"
+    escaped_external="$SANDBOX_ROOT/escaped-$escaped_name-external"
+    mkdir -p "$escaped_project" "$escaped_external"
+    printf '%s\n' "external-$escaped_name-sentinel" > "$escaped_external/sentinel.txt"
+    ln -s "$escaped_external" "$escaped_project/$escaped_root"
+    escaped_before="$(find "$escaped_external" -mindepth 1 -maxdepth 3 -type f -print -exec cksum {} \; | LC_ALL=C sort)"
+    capture run_cli "$escaped_project" init --runtime codex
+    assert_eq 1 "$COMMAND_STATUS"
+    assert_contains "$COMMAND_OUTPUT" "Refusing project destination through symlinked component: $escaped_root"
+    escaped_after="$(find "$escaped_external" -mindepth 1 -maxdepth 3 -type f -print -exec cksum {} \; | LC_ALL=C sort)"
+    assert_eq "$escaped_before" "$escaped_after" "$escaped_root escape mutated external content"
+done
 
 test_start "Codex settings are added without replacing unrelated tables"
 codex_table_project="$SANDBOX_ROOT/codex-table"
@@ -453,7 +481,8 @@ assert_eq "$manifest_before_sync" "$(cksum "$manifest")" "generated manifest was
 
 test_start "sync migrates a legacy configuration without changing existing policy"
 legacy_project="$SANDBOX_ROOT/legacy"
-mkdir -p "$legacy_project/.cyberpunk"
+mkdir -p "$legacy_project"
+assert_exit 0 run_cli "$legacy_project" init
 write_legacy_config "$legacy_project/.cyberpunk/config.yml"
 legacy_delivery_before="$(section_text "$legacy_project/.cyberpunk/config.yml" delivery)"
 legacy_workflow_before="$(section_text "$legacy_project/.cyberpunk/config.yml" workflow)"
@@ -477,6 +506,31 @@ legacy_checksum_before="$(cksum "$legacy_config")"
 assert_exit 0 run_cli "$legacy_project" sync
 legacy_checksum_after="$(cksum "$legacy_config")"
 assert_eq "$legacy_checksum_before" "$legacy_checksum_after" "sync migration was not stable"
+
+test_start "complete baseline v1 scaffold requires a reviewed canonical protocol upgrade"
+baseline_v1_project="$SANDBOX_ROOT/baseline-v1"
+mkdir -p "$baseline_v1_project"
+write_baseline_v1_scaffold "$baseline_v1_project"
+baseline_workflow_before="$(cksum "$baseline_v1_project/.cyberpunk/workflow.md")"
+baseline_roles_before="$(find "$baseline_v1_project/agents" -type f -name '*.md' -exec cksum {} \; | LC_ALL=C sort)"
+baseline_skills_before="$(find "$baseline_v1_project/skills" -type f -name 'SKILL.md' -exec cksum {} \; | LC_ALL=C sort)"
+baseline_config_before="$(cksum "$baseline_v1_project/.cyberpunk/config.yml")"
+capture run_cli "$baseline_v1_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol upgrade required"
+assert_contains "$COMMAND_OUTPUT" "review the canonical workflow, roles, and skills"
+assert_eq "$baseline_workflow_before" "$(cksum "$baseline_v1_project/.cyberpunk/workflow.md")" "legacy workflow changed before review"
+assert_eq "$baseline_roles_before" "$(find "$baseline_v1_project/agents" -type f -name '*.md' -exec cksum {} \; | LC_ALL=C sort)" "legacy roles changed before review"
+assert_eq "$baseline_skills_before" "$(find "$baseline_v1_project/skills" -type f -name 'SKILL.md' -exec cksum {} \; | LC_ALL=C sort)" "legacy skills changed before review"
+assert_eq "$baseline_config_before" "$(cksum "$baseline_v1_project/.cyberpunk/config.yml")" "legacy config migrated before canonical review"
+[[ ! -e "$baseline_v1_project/.cyberpunk/generated.yml" ]] || fail "legacy scaffold claimed v2 generated readiness"
+capture run_cli "$baseline_v1_project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol upgrade required"
+assert_exit 0 run_cli "$baseline_v1_project" status
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol: reviewed upgrade required"
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol action: review and reconcile version-2 workflow, roles, and skills before sync"
+assert_contains "$COMMAND_OUTPUT" "Generated assets: upgrade required"
 
 test_start "every agent default skill resolves"
 for agent_file in "$project"/agents/*.md; do

@@ -1,5 +1,7 @@
 # Cyberpunk Engineering Team Workflow
 
+**Protocol version: 2**
+
 The Nexus is the default entry point for engineering tasks and owns coordination through delivery. The Fixer is the direct entry point for product discovery and may also receive discovery-heavy work from Nexus. Agents exchange explicit artifacts; they do not rely on hidden conversational context.
 
 ## Intake
@@ -11,6 +13,8 @@ If the user names an integration branch, Nexus uses it. Otherwise Nexus creates 
 ## Requirements Discovery
 
 Users may invoke The Fixer directly. Before classification, Nexus routes a new product, feature, or architectural request to The Fixer when material decisions about the target user, problem, scope, expected behavior, constraints, or acceptance criteria remain unresolved. Nexus does not route a routine bug fix or maintenance task, a sufficiently specified request, or an approved PRD with no blocking deferred decision.
+
+Interactive Fixer discovery remains in the parent conversation so it can ask the user one focused question at a time. Non-interactive Fixer analysis may use a native subagent when it needs no user dialogue; its complete findings return to the parent before interactive discovery continues.
 
 The Fixer loads `requirements-discovery`, inspects project context and relevant memory, and uses Brief, Standard, or Architectural discovery depth. It asks one focused question at a time, compares two or three viable approaches, and presents requirements in sections for user approval. Work that is too broad for one PRD is decomposed before discovery continues.
 
@@ -52,9 +56,9 @@ Operator refreshes repository facts when needed. Mind defines the implementation
 
 Nexus is the only component allowed to spawn, resume, steer, interrupt, or replace Cyberpunk subagents. Every other role performs its assigned work only; it never creates sibling or nested team agents. Fresh native contexts receive the complete work packet, required skills, result evidence, and findings because conversational context is not inherited.
 
-Nexus resolves the active runtime and configured `max_concurrent_agents` before dispatch. It honors an observable lower runtime cap and `agents.enabled = false`. The global maximum is three active subagents, including planners, workers, and reviewers but excluding Nexus.
+Nexus resolves the active runtime and configured `max_concurrent_agents` before dispatch. It computes `effective_limit` as the minimum of the configured maximum, the observed runtime cap, and three, so the hard ceiling remains three active subagents. It honors `agents.enabled = false`, and it never dispatches above `effective_limit`. When configuration says `parallelism: sequential`, the effective concurrent limit is one and every eligible role runs one at a time even if the runtime could accept more.
 
-Dependency-bound planning stages run sequentially as fresh native roles. Nexus places only dependency-ready packets into a ready queue after their dependencies are approved and integrated where required. It dispatches only `parallel_safe: true` packets while fewer than three active subagents occupy the global capacity. A full queue leaves excess ready packets queued; capacity waiting is not a fallback.
+Dependency-bound planning stages run sequentially as fresh native roles. Nexus places only dependency-ready packets into a ready queue after their dependencies are approved and integrated where required. It dispatches only `parallel_safe: true` packets while active subagents are below `effective_limit`. A full queue leaves excess ready packets queued; capacity waiting is not a fallback.
 
 When a worker fails, Nexus continues unrelated jobs, retains the failed worker's worktree and evidence, and never integrates that result. Every completed result receives a fresh Gatekeeper review; independent reviews share the same global capacity. On rejection, Nexus resumes the original worker when supported, otherwise it replaces the worker with the complete packet, result evidence, and findings. Nexus merges approved results in dependency order and starts a different fresh Gatekeeper instance for assembled-change review before delivery.
 
@@ -76,7 +80,7 @@ The assigned specialist reads its role, required skills, work packet, relevant m
 
 ## Review and Repair
 
-Gatekeeper independently inspects requirements, diff, commit, and fresh verification evidence in a fresh context. Each review records the runtime-provided reviewer identity when exposed; otherwise it records `null` and never invents an identity. When native delegation is available, approval without fresh context is invalid. A rejected finding returns to the same worker worktree. After two unsuccessful repair cycles for the same finding, Nexus requires a new diagnosis. After a third unresolved cycle, Nexus escalates with evidence and the smallest needed decision.
+Gatekeeper independently inspects requirements, diff, commit, and verification evidence. When native delegation is available, the review runs in a fresh context and approval without fresh context is invalid. During a truthful parent-session fallback, the parent performs the independent review and records `review_agent_instance: null` with `review_context: parent`; it never claims a fresh native reviewer. A rejected finding returns to the same worker worktree. After two unsuccessful repair cycles for the same finding, Nexus requires a new diagnosis. After a third unresolved cycle, Nexus escalates with evidence and the smallest needed decision.
 
 ## Integration
 
@@ -137,6 +141,7 @@ merge_ready: true
 Local state at `.cyberpunk/runs/<task-id>/state.yml` is resumable but ignored by Git.
 
 ```yaml
+schema_version: 2
 runtime: codex
 execution_mode: parallel
 max_concurrent_agents: 3
@@ -181,7 +186,9 @@ fallback:
   delivery_impact: null
 ```
 
-Run state records observed execution rather than the plan. `native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. Every approved per-result review requires `review_context: fresh`, `result_commit`, and either non-empty `verification_observed` or an explicit `verification_skipped_reason`. Every current `state.yml` run has one `assembled_review` tied to `integrated_commit`; an approved assembled review follows the same fresh-context and verification-evidence requirements and uses an identity distinct from each per-result reviewer. Legacy `run.yml` records retain the Task 5 schema and do not require `assembled_review`. These names are compatible with local recorded-state validation.
+Run state records observed execution rather than the plan. Current `state.yml` records require `schema_version: 2`. The exact pre-0.4 `state.yml` schema with `integration_branch`, `base_commit`, and legacy job fields remains accepted read-only; it is never mistaken for current native evidence. Legacy `run.yml` records retain the Task 5 schema and do not require `assembled_review`.
+
+`native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. With native delegation, every approved per-result review requires `review_context: fresh`, `result_commit`, and either non-empty `verification_observed` or an explicit `verification_skipped_reason`. A parent-session fallback instead records `review_agent_instance: null` and `review_context: parent` consistently for per-result and assembled review. Every current `state.yml` run has one `assembled_review` tied to `integrated_commit`; a native approved assembled review follows the same fresh-context and verification-evidence requirements and uses an identity distinct from each per-result reviewer.
 
 ## Sequential Fallback
 

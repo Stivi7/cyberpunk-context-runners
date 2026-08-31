@@ -22,7 +22,7 @@ Work packet, result commit, worker worktree, diff, project context, implementati
 
 ## Procedure
 
-1. Start in a fresh context; when native delegation is available, approval without fresh context is invalid.
+1. When native delegation is available, start in a fresh context; approval without fresh context is invalid. During parent-session fallback, review independently in the parent and record `review_agent_instance: null` plus `review_context: parent`.
 2. Verify result commit, base, scope, and changed files.
 3. Trace acceptance criteria to implementation and tests.
 4. Review correctness, boundaries, failure handling, security, compatibility, and maintainability as applicable.
@@ -33,7 +33,7 @@ Work packet, result commit, worker worktree, diff, project context, implementati
 
 ## Verification
 
-The review identifies the exact commit and includes fresh observed evidence for its decision. An unavailable runtime-provided identifier is recorded as `null`, never invented.
+The review identifies the exact commit and includes observed evidence for its decision. Native review uses fresh context. Parent-session fallback records parent context and a `null` identity; an unavailable runtime-provided identifier is never invented.
 
 ## Output
 
