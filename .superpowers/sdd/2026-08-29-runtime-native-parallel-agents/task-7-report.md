@@ -26,3 +26,10 @@
 - GREEN: the smallest renderer change keeps the sentence on one line; one persistent `bash tests/integration_test.bash` run passed.
 - Final suite: one persistent `bash tests/run.sh` run passed agent, CLI, documentation, integration, protocol, and the initial runtime-adapter cases. It then exited during the runtime-adapter project-skill normalization case after emitting `awk: newline in string` for a newline-containing fixture value.
 - The model-routing todo remains unchanged because that final full suite did not pass. No additional full-suite retry was started.
+
+## Fix Round 2
+
+- RED: `runtime_adapter_test.bash` passed a multiline block-list replacement through `awk -v replacement=...`; BSD awk rejected it with `awk: newline in string` before the CLI ran.
+- GREEN: the test helper now writes the replacement bytes to a temporary file, lets awk read that file, and removes it on both success and failure. `bash -n tests/runtime_adapter_test.bash` and one persistent `bash tests/runtime_adapter_test.bash` run passed.
+- Remaining-suite gate: `runtime_skill_metadata_byte_test.bash` passed, then `runtime_validation_test.bash` failed on its still-stale expected diagnostic `Missing expected generated asset: .codex/agents/nexus.toml`. The actual stable diagnostic is `Missing generated asset: .codex/agents/nexus.toml`.
+- The bounded run stopped there; `skill_contract_test.bash` and `smoke_test.bash` were not rerun. The model-routing todo remains unchanged.
