@@ -119,6 +119,7 @@ for value in \
     "delivery_impact:"; do
     assert_contains "$workflow_content" "$value" "run-state evidence schema"
 done
+assert_contains "$workflow_content" 'Legacy `run.yml`' "legacy run-state compatibility"
 
 test_start "fallback vocabulary records the only supported observed model recovery"
 for value in \

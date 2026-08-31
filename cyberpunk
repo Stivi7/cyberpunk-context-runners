@@ -1095,6 +1095,9 @@ validate_recorded_run_state() {
     local maximum
     local execution_mode
     local fallback_used
+    local fallback_record
+    local fallback_category
+    local fallback_affected_jobs
     local job_records
     local job
     local parallel_safe
@@ -1114,6 +1117,9 @@ validate_recorded_run_state() {
     local assembled_verification_observed
     local assembled_verification_skipped_reason
     local assembled_review_status
+    local per_result_reviewers
+    local review_fallback_exempt
+    local record_separator=$'\034'
     local native_evidence=false
     local parallel_claimed=false
     local duplicate_scope
@@ -1134,7 +1140,12 @@ validate_recorded_run_state() {
             errors=$((errors + 1))
             continue
         fi
-        for state_records in runtime execution_mode max_concurrent_agents jobs assembled_review fallback; do
+        if [[ "$state" == */state.yml ]]; then
+            state_records=(runtime execution_mode max_concurrent_agents jobs assembled_review fallback)
+        else
+            state_records=(runtime execution_mode max_concurrent_agents jobs fallback)
+        fi
+        for state_records in "${state_records[@]}"; do
             case "$state_records" in
                 jobs|assembled_review|fallback) state_key_count="$(grep -Fxc "${state_records}:" "$state")" ;;
                 *) state_key_count="$(grep -Ec "^${state_records}:[[:space:]]*[^[:space:]]" "$state" || true)" ;;
@@ -1170,8 +1181,65 @@ validate_recorded_run_state() {
         else
             parallel_claimed=false
         fi
+        if LC_ALL=C grep -q "$record_separator" "$state"; then
+            log_error "Recorded run state contains an unsupported record delimiter: $state"
+            errors=$((errors + 1))
+            continue
+        fi
 
-        job_records="$(awk '
+        fallback_record="$(awk -v separator="$record_separator" '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function unquote(value) {
+                value=trim(value)
+                if (value ~ /^".*"$/) value=substr(value, 2, length(value) - 2)
+                return value
+            }
+            function append_job(value,    item, count, index_value) {
+                value=trim(value)
+                sub(/^\[/, "", value)
+                sub(/\]$/, "", value)
+                count=split(value, items, /,/)
+                for (index_value=1; index_value<=count; index_value++) {
+                    item=unquote(items[index_value])
+                    if (item != "") {
+                        if (affected_jobs != "") affected_jobs=affected_jobs ","
+                        affected_jobs=affected_jobs item
+                    }
+                }
+            }
+            $0 == "fallback:" { in_fallback=1; next }
+            in_fallback && /^[^[:space:]]/ { exit }
+            !in_fallback { next }
+            reading_jobs && /^    -[[:space:]]*/ {
+                value=$0
+                sub(/^    -[[:space:]]*/, "", value)
+                append_job(value)
+                next
+            }
+            reading_jobs { reading_jobs=0 }
+            /^  category:[[:space:]]*/ {
+                value=$0
+                sub(/^  category:[[:space:]]*/, "", value)
+                category=unquote(value)
+                next
+            }
+            /^  affected_jobs:[[:space:]]*$/ { reading_jobs=1; next }
+            /^  affected_jobs:[[:space:]]*/ {
+                value=$0
+                sub(/^  affected_jobs:[[:space:]]*/, "", value)
+                append_job(value)
+            }
+            END { print category separator affected_jobs }
+        ' "$state")"
+        IFS="$record_separator" read -r fallback_category fallback_affected_jobs <<EOF
+$fallback_record
+EOF
+
+        job_records="$(awk -v separator="$record_separator" '
             function trim(value) {
                 sub(/^[[:space:]]+/, "", value)
                 sub(/[[:space:]]+$/, "", value)
@@ -1199,10 +1267,14 @@ validate_recorded_run_state() {
             }
             function has_value(value) {
                 value=unquote(value)
-                return value != "" && value != "[]" && value != "null"
+                normalized=value
+                sub(/^\[/, "", normalized)
+                sub(/\]$/, "", normalized)
+                normalized=trim(normalized)
+                return normalized != "" && value != "null"
             }
             function emit() {
-                if (job != "") print job "|" parallel_safe "|" scopes "|" native_agent "|" agent_instance "|" review_agent_instance "|" review_context "|" review_status "|" result_commit "|" verification_observed "|" verification_skipped_reason
+                if (job != "") print job separator parallel_safe separator scopes separator native_agent separator agent_instance separator review_agent_instance separator review_context separator review_status separator result_commit separator verification_observed separator verification_skipped_reason
             }
             $0 == "jobs:" { in_jobs=1; next }
             in_jobs && /^[^[:space:]]/ { emit(); in_jobs=0; exit }
@@ -1297,7 +1369,7 @@ validate_recorded_run_state() {
             log_error "Recorded run state has no job records: $state"
             errors=$((errors + 1))
         fi
-        scopes="$(printf '%s\n' "$job_records" | awk -F '|' '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
+        scopes="$(printf '%s\n' "$job_records" | awk -F "$record_separator" '$2 == "true" { count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" values[index_value] }')"
         seen_scopes=""
         while IFS=$'\t' read -r scope_job scope_path; do
             [[ -n "$scope_job" && -n "$scope_path" ]] || continue
@@ -1314,12 +1386,23 @@ EOF
         done <<EOF
 $scopes
 EOF
-        while IFS='|' read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status result_commit verification_observed verification_skipped_reason; do
+        per_result_reviewers=""
+        while IFS="$record_separator" read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status result_commit verification_observed verification_skipped_reason; do
             [[ -n "$job" ]] || continue
             if [[ "$native_agent" != "" && "$native_agent" != null ]]; then
                 native_evidence=true
             fi
-            if [[ "$review_status" == approved && "$fallback_used" != true &&
+            review_fallback_exempt=false
+            if [[ "$fallback_used" == true && ",$fallback_affected_jobs," == *",$job,"* ]]; then
+                review_fallback_exempt=true
+            elif [[ "$fallback_used" == true && ",$fallback_affected_jobs," == *,all,* &&
+                ( "$fallback_category" == native_tools_unavailable || "$fallback_category" == delegation_disabled_by_policy || "$fallback_category" == delegation_disabled_by_user ) ]]; then
+                review_fallback_exempt=true
+            fi
+            if [[ "$review_agent_instance" != "" && "$review_agent_instance" != null ]]; then
+                per_result_reviewers="${per_result_reviewers}${review_agent_instance}"$'\n'
+            fi
+            if [[ "$review_status" == approved && "$review_fallback_exempt" != true &&
                 ( "$review_agent_instance" == "" || "$review_agent_instance" == null || "$review_context" != fresh || "$review_agent_instance" == "$agent_instance" ) ]]; then
                 log_error "Approved native review lacks fresh reviewer identity/context: $state (job: $job)"
                 errors=$((errors + 1))
@@ -1336,7 +1419,7 @@ EOF
         done <<EOF
 $job_records
 EOF
-        assembled_record="$(awk '
+        assembled_record="$(awk -v separator="$record_separator" '
             function trim(value) {
                 sub(/^[[:space:]]+/, "", value)
                 sub(/[[:space:]]+$/, "", value)
@@ -1349,7 +1432,11 @@ EOF
             }
             function has_value(value) {
                 value=unquote(value)
-                return value != "" && value != "[]" && value != "null"
+                normalized=value
+                sub(/^\[/, "", normalized)
+                sub(/\]$/, "", normalized)
+                normalized=trim(normalized)
+                return normalized != "" && value != "null"
             }
             $0 == "assembled_review:" { in_review=1; next }
             in_review && /^[^[:space:]]/ { exit }
@@ -1397,15 +1484,25 @@ EOF
                 sub(/^  verification_skipped_reason:[[:space:]]*/, "", value)
                 verification_skipped_reason=unquote(value)
             }
-            END { print integrated_commit "|" review_agent_instance "|" review_context "|" verification_observed "|" verification_skipped_reason "|" review_status }
+            END { print integrated_commit separator review_agent_instance separator review_context separator verification_observed separator verification_skipped_reason separator review_status }
         ' "$state")"
-        IFS='|' read -r assembled_integrated_commit assembled_review_agent_instance assembled_review_context assembled_verification_observed assembled_verification_skipped_reason assembled_review_status <<EOF
+        IFS="$record_separator" read -r assembled_integrated_commit assembled_review_agent_instance assembled_review_context assembled_verification_observed assembled_verification_skipped_reason assembled_review_status <<EOF
 $assembled_record
 EOF
         if [[ "$assembled_review_status" == approved ]]; then
-            if [[ "$fallback_used" != true &&
+            review_fallback_exempt=false
+            if [[ "$fallback_used" == true && ",$fallback_affected_jobs," == *,all,* &&
+                ( "$fallback_category" == native_tools_unavailable || "$fallback_category" == delegation_disabled_by_policy || "$fallback_category" == delegation_disabled_by_user ) ]]; then
+                review_fallback_exempt=true
+            fi
+            if [[ "$review_fallback_exempt" != true &&
                 ( "$assembled_review_agent_instance" == "" || "$assembled_review_agent_instance" == null || "$assembled_review_context" != fresh ) ]]; then
                 log_error "Approved assembled review lacks fresh reviewer identity/context: $state"
+                errors=$((errors + 1))
+            fi
+            if [[ "$assembled_review_agent_instance" != "" && "$assembled_review_agent_instance" != null ]] &&
+                printf '%s' "$per_result_reviewers" | grep -Fqx -- "$assembled_review_agent_instance"; then
+                log_error "Approved assembled review reuses a per-result reviewer identity: $state"
                 errors=$((errors + 1))
             fi
             if [[ "$assembled_integrated_commit" == "" || "$assembled_integrated_commit" == null ]]; then

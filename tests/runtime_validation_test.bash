@@ -20,6 +20,98 @@ mkdir -p "$project"
 git -C "$project" init -q
 assert_exit 0 run_cli "$project" init
 assert_exit 0 run_cli "$project" validate
+
+write_run_state legacy-run-record <<'EOF'
+runtime: codex
+execution_mode: sequential
+max_concurrent_agents: 1
+jobs:
+  frontend:
+    native_agent: neon
+    agent_instance: codex-agent-worker
+    parallel_safe: false
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: codex-agent-reviewer
+    review_context: fresh
+    verification_observed: [bash tests/frontend.bash]
+    review_status: approved
+    result_commit: def456
+fallback:
+  used: false
+EOF
+mv "$project/.cyberpunk/runs/legacy-run-record/state.yml" "$project/.cyberpunk/runs/legacy-run-record/run.yml"
+assert_exit 0 run_cli "$project" validate
+rm -rf "$project/.cyberpunk/runs/legacy-run-record"
+
+write_run_state reused-assembled-reviewer <<'EOF'
+runtime: codex
+execution_mode: parallel
+max_concurrent_agents: 3
+jobs:
+  frontend:
+    native_agent: neon
+    agent_instance: codex-agent-worker
+    parallel_safe: true
+    allowed_scope: [src/frontend/**]
+    review_agent_instance: codex-agent-reviewer
+    review_context: fresh
+    verification_observed: [bash tests/frontend.bash]
+    review_status: approved
+    result_commit: def456
+assembled_review:
+  integrated_commit: fed789
+  review_agent_instance: codex-agent-reviewer
+  review_context: fresh
+  verification_observed: [bash tests/assembled.bash]
+  review_status: approved
+fallback:
+  used: false
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Approved assembled review reuses a per-result reviewer identity"
+rm -rf "$project/.cyberpunk/runs/reused-assembled-reviewer"
+
+write_run_state mixed-native-fallback <<'EOF'
+runtime: codex
+execution_mode: sequential
+max_concurrent_agents: 3
+jobs:
+  native:
+    native_agent: neon
+    agent_instance: native-worker
+    parallel_safe: false
+    allowed_scope: [src/native/**]
+    review_agent_instance: null
+    review_context: stale
+    verification_observed: [bash tests/native.bash]
+    review_status: approved
+    result_commit: native456
+  fallback:
+    native_agent: null
+    agent_instance: null
+    parallel_safe: false
+    allowed_scope: [src/fallback/**]
+    review_agent_instance: null
+    review_context: stale
+    verification_skipped_reason: runtime spawn failed | original diagnostics retained
+    review_status: approved
+    result_commit: fallback456
+assembled_review:
+  integrated_commit: fed789
+  review_agent_instance: assembled-reviewer
+  review_context: fresh
+  verification_observed: [bash tests/assembled.bash]
+  review_status: approved
+fallback:
+  used: true
+  category: runtime_spawn_failure
+  affected_jobs: [fallback]
+EOF
+capture run_cli "$project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Approved native review lacks fresh reviewer identity/context"
+rm -rf "$project/.cyberpunk/runs/mixed-native-fallback"
 git -C "$project" add -A
 git -C "$project" -c user.name="Fixture" -c user.email="fixture@example.test" commit -qm "baseline"
 before="$(cksum "$project/.cyberpunk/generated.yml")"
