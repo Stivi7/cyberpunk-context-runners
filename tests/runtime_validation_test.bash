@@ -14,6 +14,12 @@ run_cli() {
     (cd "$project" && "$CYBERPUNK_BIN" "$@")
 }
 
+write_run_state() {
+    local name="$1"
+    mkdir -p "$project/.cyberpunk/runs/$name"
+    cat > "$project/.cyberpunk/runs/$name/state.yml"
+}
+
 test_start "status reports synchronized native registrations without claiming live capability"
 project="$SANDBOX_ROOT/healthy"
 mkdir -p "$project"
@@ -221,12 +227,6 @@ assert_contains "$COMMAND_OUTPUT" "Generated assets: drift detected"
 
 test_start "recorded native run evidence binds parallel safety, review, and delivery claims"
 assert_exit 0 run_cli "$project" init --force
-
-write_run_state() {
-    local name="$1"
-    mkdir -p "$project/.cyberpunk/runs/$name"
-    cat > "$project/.cyberpunk/runs/$name/state.yml"
-}
 
 write_run_state valid <<'EOF'
 runtime: codex

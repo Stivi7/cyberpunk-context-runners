@@ -1098,6 +1098,7 @@ validate_recorded_run_state() {
     local fallback_record
     local fallback_category
     local fallback_affected_jobs
+    local fallback_category_valid=false
     local job_records
     local job
     local parallel_safe
@@ -1238,6 +1239,18 @@ validate_recorded_run_state() {
         IFS="$record_separator" read -r fallback_category fallback_affected_jobs <<EOF
 $fallback_record
 EOF
+        fallback_category_valid=false
+        if [[ "$fallback_used" == true ]]; then
+            case "$fallback_category" in
+                native_tools_unavailable|delegation_disabled_by_policy|delegation_disabled_by_user|no_parallel_safe_packets|runtime_spawn_failure)
+                    fallback_category_valid=true
+                    ;;
+                *)
+                    log_error "Recorded fallback category is unsupported: $fallback_category ($state)"
+                    errors=$((errors + 1))
+                    ;;
+            esac
+        fi
 
         job_records="$(awk -v separator="$record_separator" '
             function trim(value) {
@@ -1271,7 +1284,7 @@ EOF
                 sub(/^\[/, "", normalized)
                 sub(/\]$/, "", normalized)
                 normalized=trim(normalized)
-                return normalized != "" && value != "null"
+                return normalized != "" && normalized != "null"
             }
             function emit() {
                 if (job != "") print job separator parallel_safe separator scopes separator native_agent separator agent_instance separator review_agent_instance separator review_context separator review_status separator result_commit separator verification_observed separator verification_skipped_reason
@@ -1393,9 +1406,9 @@ EOF
                 native_evidence=true
             fi
             review_fallback_exempt=false
-            if [[ "$fallback_used" == true && ",$fallback_affected_jobs," == *",$job,"* ]]; then
+            if [[ "$fallback_used" == true && "$fallback_category_valid" == true && ",$fallback_affected_jobs," == *",$job,"* ]]; then
                 review_fallback_exempt=true
-            elif [[ "$fallback_used" == true && ",$fallback_affected_jobs," == *,all,* &&
+            elif [[ "$fallback_used" == true && "$fallback_category_valid" == true && ",$fallback_affected_jobs," == *,all,* &&
                 ( "$fallback_category" == native_tools_unavailable || "$fallback_category" == delegation_disabled_by_policy || "$fallback_category" == delegation_disabled_by_user ) ]]; then
                 review_fallback_exempt=true
             fi
@@ -1436,7 +1449,7 @@ EOF
                 sub(/^\[/, "", normalized)
                 sub(/\]$/, "", normalized)
                 normalized=trim(normalized)
-                return normalized != "" && value != "null"
+                return normalized != "" && normalized != "null"
             }
             $0 == "assembled_review:" { in_review=1; next }
             in_review && /^[^[:space:]]/ { exit }
@@ -1491,7 +1504,7 @@ $assembled_record
 EOF
         if [[ "$assembled_review_status" == approved ]]; then
             review_fallback_exempt=false
-            if [[ "$fallback_used" == true && ",$fallback_affected_jobs," == *,all,* &&
+            if [[ "$fallback_used" == true && "$fallback_category_valid" == true && ",$fallback_affected_jobs," == *,all,* &&
                 ( "$fallback_category" == native_tools_unavailable || "$fallback_category" == delegation_disabled_by_policy || "$fallback_category" == delegation_disabled_by_user ) ]]; then
                 review_fallback_exempt=true
             fi
