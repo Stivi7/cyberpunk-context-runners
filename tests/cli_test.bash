@@ -168,13 +168,13 @@ cp "$runtime_validation_project/config.healthy.yml" "$runtime_validation_config"
 rm "$runtime_validation_project/.codex/agents/nexus.toml"
 capture run_cli "$runtime_validation_project" validate
 assert_eq 1 "$COMMAND_STATUS"
-assert_contains "$COMMAND_OUTPUT" "Missing expected generated asset: .codex/agents/nexus.toml"
+assert_contains "$COMMAND_OUTPUT" "Missing generated asset: .codex/agents/nexus.toml"
 
 assert_exit 0 run_cli "$runtime_validation_project" status
 assert_contains "$COMMAND_OUTPUT" "Generated assets: drift detected"
 
 test_start "version is updated"
 assert_exit 0 "$CYBERPUNK_BIN" --version
-assert_contains "$COMMAND_OUTPUT" "0.3.0"
+assert_contains "$COMMAND_OUTPUT" "0.4.0"
 
 echo "PASS: CLI tests"

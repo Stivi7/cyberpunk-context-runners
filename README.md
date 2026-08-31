@@ -6,7 +6,7 @@ Cyberpunk Context Runners is a runtime-neutral engineering-team protocol. Its ca
 
 ## Quick Start
 
-Download or clone this repository, make the `cyberpunk` script available on your path, then initialize it inside a project:
+Download or clone this repository, make the `cyberpunk` script available on your path, then initialize it inside a project. Plain `init` enables Codex, Claude Code, and Cursor registrations together:
 
 ```bash
 cd /path/to/your/project
@@ -14,6 +14,18 @@ cyberpunk init
 cyberpunk validate
 cyberpunk status
 ```
+
+To register only the runtimes used by a project, choose one or more explicit runtimes. Re-running `init` adds selected runtimes; it does not remove existing registrations.
+
+```bash
+cyberpunk init --runtime codex
+cyberpunk init --runtime claude
+cyberpunk init --runtime cursor
+cyberpunk init --runtime codex --runtime claude
+cyberpunk sync
+```
+
+Start Codex, Claude Code, or Cursor normally after initialization, then ask Nexus for work. The Bash CLI installs and checks registrations; it never starts model processes or claims a provider session is available.
 
 Then give the task to your coding agent through The Nexus:
 
@@ -62,6 +74,16 @@ The system contains 11 specialized roles:
 
 Direct role invocation remains available for focused work, but Nexus is the recommended entry point because it owns the complete lifecycle.
 
+## Native Dispatch, Models, and Worktrees
+
+Nexus is the parent and sole dispatcher. At most three active subagents run at once; Nexus is excluded. Only dependency-ready, ownership-safe packets may run concurrently: dependency-bound roles remain sequential, and a full queue waits for capacity rather than being described as fallback.
+
+Every mutating packet still receives a recorded branch and worktree. Worktree isolation does not start agents or create concurrency; it only separates approved changes. Gatekeeper uses fresh context before integration and again for the assembled change.
+
+The configured model profiles map deep, balanced, and fast roles to each runtime. A runtime may reject a preferred model; Nexus records that observation and retries once with `inherit`. Configuration is intent, not evidence: actual native-agent identity, preferred/effective model, fallback reason, execution mode, reviews, and verification belong in local run state and delivery reporting. `status` does not prove live capability.
+
+Inspect registrations in the runtime you use: Codex reads `.codex/agents/` and `.agents/skills/`; Claude Code reads `.claude/agents/` and `.claude/skills/`; Cursor reads `.cursor/agents/` and `.cursor/skills/`. The generated files are thin pointers to the canonical Markdown policy, so runtime UI details can differ without changing the workflow.
+
 ## Git Worktrees as Job Tracking
 
 Every mutating agent assignment receives a worker branch and worktree, even when jobs execute sequentially.
@@ -106,19 +128,16 @@ Lessons are promoted only when supported by evidence, reusable, actionable, non-
 
 The Operator discovers the project's real setup, formatting, linting, static analysis, test, build, and security commands from repository evidence. Missing commands remain unavailable instead of being invented. Quality policy belongs to the project; the team does not impose a language, framework, package manager, cloud, programming paradigm, or universal coverage target.
 
-Thin adapters are generated for common file-aware runtimes:
+Native adapters are generated for the selected runtimes. The canonical `agents/`, `skills/`, and `.cyberpunk/` files remain the behavioral source of truth; generated adapters only point back to them. Bounded Cyberpunk-managed blocks are added to `AGENTS.md` and `CLAUDE.md`, preserving text outside the markers. Cursor owns `.cursor/rules/cyberpunk.mdc`.
 
-- `AGENTS.md`
-- `CLAUDE.md`
-- `.cursor/rules/rules.mdc`
-
-All adapters point to the same canonical workflow rather than duplicating policy.
+Generated paths and hashes are recorded in `.cyberpunk/generated.yml`. `sync` reports a collision at an unowned native path and detects locally modified generated files as drift; modified generated files require `--force` to replace them. Version-1 configuration migrates to version 2 during `sync`; the migration is idempotent and preserves existing project-owned settings. Enable project-owned skills explicitly in `skills.enabled_project` before they receive native wrappers.
 
 ## Generated Structure
 
 ```text
 .cyberpunk/
 ├── config.yml
+├── generated.yml            # generated asset ownership and hashes
 ├── project.md
 ├── workflow.md
 ├── memory/
@@ -132,24 +151,38 @@ plans/
 tasks/
 AGENTS.md
 CLAUDE.md
-.cursor/rules/rules.mdc
+.codex/
+├── config.toml
+└── agents/
+.agents/skills/
+.claude/
+├── agents/
+└── skills/
+.cursor/
+├── agents/
+├── skills/
+└── rules/cyberpunk.mdc
 ```
 
 ## CLI
 
 ```text
-cyberpunk init [--dry-run] [--force]
+cyberpunk init [--runtime codex|claude|cursor|all]... [--dry-run] [--force]
+cyberpunk sync [--dry-run] [--force]
 cyberpunk validate
 cyberpunk status
 cyberpunk --help
 cyberpunk --version
 ```
 
-- `init` copies missing templates and adds ignored local-state paths.
+- `init` copies missing canonical templates, adds ignored local-state paths, and registers all runtimes by default; `--runtime` selects a subset.
 - `init --dry-run` previews changes.
-- `init --force` refreshes framework-owned template paths without deleting extra project skills.
-- `validate` checks required protocol, agent, skill, and ignore contracts.
-- `status` reports initialization, discovery, agent, skill, and local-run state without writing.
+- `init --force` refreshes framework-owned template paths without deleting extra project skills. It is also required before replacing drifted Cyberpunk-generated assets.
+- `sync` migrates configuration when needed and regenerates the selected runtime registrations without recopying ordinary project-owned files.
+- `validate` checks canonical protocol, selected native agents and skills, managed instruction blocks, manifests, collisions, and drift without writing.
+- `status` reports configured policy and generated-state inspection without writing; it does not prove live capability or model availability.
+
+The default execution policy records `max_concurrent_agents: 3`. It is a safety cap, not a promise that a runtime can delegate: a provider-disabled or unavailable native path is recorded as sequential fallback instead of simulated parallel work. See [the optional live runtime smoke matrix](docs/live-runtime-smoke.md) for manual account-level verification.
 
 ## Development
 
