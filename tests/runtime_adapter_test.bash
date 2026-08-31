@@ -352,10 +352,27 @@ set_enabled_project_skills() {
     local path="$1"
     local replacement="$2"
     local temporary="$path.tmp"
+    local replacement_file
+    local awk_status
 
-    awk -v replacement="$replacement" '
+    replacement_file="$(mktemp "${TMPDIR:-/tmp}/cyberpunk-runtime-adapter-replacement.XXXXXX")"
+    printf '%s' "$replacement" > "$replacement_file"
+
+    if awk -v replacement_file="$replacement_file" '
+        BEGIN {
+            replacement_line_count=0
+            while ((getline replacement_line < replacement_file) > 0) {
+                if (replacement_line_count == 0) {
+                    replacement_text=replacement_line
+                } else {
+                    replacement_text=replacement_text "\n" replacement_line
+                }
+                replacement_line_count++
+            }
+            close(replacement_file)
+        }
         $0 ~ /^  enabled_project:/ {
-            print "  enabled_project: " replacement
+            print "  enabled_project: " replacement_text
             replaced=1
             if ($0 == "  enabled_project:") skip_list=1
             next
@@ -364,7 +381,13 @@ set_enabled_project_skills() {
         skip_list { skip_list=0 }
         { print }
         END { if (!replaced) exit 1 }
-    ' "$path" > "$temporary"
+    ' "$path" > "$temporary"; then
+        awk_status=0
+    else
+        awk_status=$?
+    fi
+    rm -f "$replacement_file"
+    [[ "$awk_status" -eq 0 ]] || return "$awk_status"
     mv "$temporary" "$path"
 }
 
