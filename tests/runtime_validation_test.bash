@@ -219,7 +219,7 @@ cp "$project/config.healthy.yml" "$project/.cyberpunk/config.yml"
 rm "$project/.codex/agents/nexus.toml"
 capture run_cli "$project" validate
 assert_eq 1 "$COMMAND_STATUS"
-assert_contains "$COMMAND_OUTPUT" "Missing expected generated asset: .codex/agents/nexus.toml"
+assert_contains "$COMMAND_OUTPUT" "Missing generated asset: .codex/agents/nexus.toml"
 
 test_start "status reports generated drift for a missing expected native agent"
 assert_exit 0 run_cli "$project" status
