@@ -52,8 +52,56 @@ for value in \
     assert_contains "$readme" "$value" "README contract"
 done
 
+test_start "README and generated-template guide document runtime-native setup and inspection"
+template_readme="$(<"$REPO_ROOT/templates/README.md")"
+documentation="$readme$template_readme"
+for value in \
+    "cyberpunk init --runtime codex" \
+    "cyberpunk init --runtime claude" \
+    "cyberpunk init --runtime cursor" \
+    "cyberpunk init --runtime codex --runtime claude" \
+    "cyberpunk sync" \
+    ".codex/agents/" \
+    ".agents/skills/" \
+    ".claude/agents/" \
+    ".claude/skills/" \
+    ".cursor/agents/" \
+    ".cursor/skills/" \
+    "max_concurrent_agents: 3" \
+    "worktree isolation does not start agents" \
+    "inherit" \
+    "generated.yml" \
+    "dependency-bound roles remain sequential" \
+    "full queue waits" \
+    "modified generated files require" \
+    "migration is idempotent" \
+    "does not prove live capability"; do
+    assert_contains "$documentation" "$value" "runtime-native documentation contract"
+done
+
+test_start "optional usage-consuming live runtime smoke matrix is documented, not automated"
+live_smoke="$REPO_ROOT/docs/live-runtime-smoke.md"
+assert_file "$live_smoke"
+live_smoke_content="$(<"$live_smoke")"
+for value in \
+    "Optional" \
+    "usage-consuming" \
+    "account-dependent" \
+    "Codex" \
+    "Claude Code" \
+    "Cursor" \
+    "four independent packets" \
+    "three native subagents" \
+    "queued packet" \
+    "worktree/branch isolation" \
+    "fresh Gatekeeper identity" \
+    "sequential fallback" \
+    'one `inherit` retry'; do
+    assert_contains "$live_smoke_content" "$value" "live smoke matrix contract"
+done
+
 test_start "documentation remains runtime neutral"
-documentation="$readme$(<"$REPO_ROOT/templates/README.md")"
+documentation="$readme$template_readme"
 for adapter in "${adapters[@]}"; do
     documentation="$documentation$(<"$adapter")"
 done

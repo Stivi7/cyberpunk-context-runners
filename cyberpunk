@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
-VERSION="0.3.0"
+VERSION="0.4.0"
 
 DRY_RUN=false
 FORCE=false
