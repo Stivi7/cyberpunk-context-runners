@@ -181,7 +181,7 @@ fallback:
   delivery_impact: null
 ```
 
-Run state records observed execution rather than the plan. `native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. Every approved per-result review requires `review_context: fresh`, `result_commit`, and either non-empty `verification_observed` or an explicit `verification_skipped_reason`. Every run has one `assembled_review` tied to `integrated_commit`; an approved assembled review follows the same fresh-context and verification-evidence requirements. These names are compatible with local recorded-state validation.
+Run state records observed execution rather than the plan. `native_agent`, `agent_instance`, and `review_agent_instance` contain runtime-provided values when exposed and `null` when not exposed; identities are never invented. Every approved per-result review requires `review_context: fresh`, `result_commit`, and either non-empty `verification_observed` or an explicit `verification_skipped_reason`. Every current `state.yml` run has one `assembled_review` tied to `integrated_commit`; an approved assembled review follows the same fresh-context and verification-evidence requirements and uses an identity distinct from each per-result reviewer. Legacy `run.yml` records retain the Task 5 schema and do not require `assembled_review`. These names are compatible with local recorded-state validation.
 
 ## Sequential Fallback
 
