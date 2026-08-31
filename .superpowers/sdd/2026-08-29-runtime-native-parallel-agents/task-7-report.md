@@ -33,3 +33,10 @@
 - GREEN: the test helper now writes the replacement bytes to a temporary file, lets awk read that file, and removes it on both success and failure. `bash -n tests/runtime_adapter_test.bash` and one persistent `bash tests/runtime_adapter_test.bash` run passed.
 - Remaining-suite gate: `runtime_skill_metadata_byte_test.bash` passed, then `runtime_validation_test.bash` failed on its still-stale expected diagnostic `Missing expected generated asset: .codex/agents/nexus.toml`. The actual stable diagnostic is `Missing generated asset: .codex/agents/nexus.toml`.
 - The bounded run stopped there; `skill_contract_test.bash` and `smoke_test.bash` were not rerun. The model-routing todo remains unchanged.
+
+## Fix Round 3
+
+- RED: `runtime_validation_test.bash` contained the sole remaining stale assertion for `Missing expected generated asset: .codex/agents/nexus.toml` while the validator stably emits `Missing generated asset: .codex/agents/nexus.toml`.
+- GREEN: the one assertion was aligned. One persistent run each of `runtime_validation_test.bash`, `skill_contract_test.bash`, and `smoke_test.bash` passed.
+- Combined with the fresh green agent, CLI, documentation, integration, protocol, runtime-adapter, and runtime-skill-metadata evidence from this bounded sequence, all 10 automated test files have fresh passing evidence without a full-suite restart.
+- The model-routing todo line was added exactly once after that evidence gate.

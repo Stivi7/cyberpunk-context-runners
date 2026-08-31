@@ -1,3 +1,4 @@
 - [x] Add the PRD creator (cyberpunk persona). Should behave like superpowers brainstorming skill. Either use that or make a custom one. The goal is to interact with the user and build requirements which nexus can use.
 - [ ] Ability to work across different repositories. Most of the times we have projects that are scattered across different repositories, for example backend, frontend, infrastructure etc... The cyberpunk should be able to work across these and maintain the memory web and how these projects are related.
 - [ ] https://github.com/obra/superpowers#codex-cli Lets think of handling multiple ai tools like codex, claude code, cursor etc like superpowers does, in a plugin way. Check if it is possible with our current approach.
+- [x] For each agent specify the ai model that will be used. for example fixer and nexus gpt sol. If the model is not found, it falls to inherit (since it depends on the ai tool being used)
