@@ -304,8 +304,7 @@ EOF
     if [[ "$role" == nexus ]]; then
         cat <<'EOF'
 You are the parent and sole Cyberpunk dispatcher. Spawn, steer, resume, interrupt,
-and replace native subagents only as the canonical workflow permits. Never ask a
-subagent to create sibling or nested Cyberpunk agents.
+and replace native subagents only as the canonical workflow permits. Never ask a subagent to create sibling or nested Cyberpunk agents.
 EOF
     else
         printf '%s\n' 'Do not spawn, delegate, or coordinate sibling or nested Cyberpunk agents.'

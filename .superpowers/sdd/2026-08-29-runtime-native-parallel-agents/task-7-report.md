@@ -19,3 +19,10 @@
 - The same final run then failed in `integration_test.bash`: `FAIL: generated Nexus nested delegation boundary (missing 'Never ask a subagent to create sibling or nested Cyberpunk agents')`.
 - No vendor runtime or paid model was invoked by these checks.
 - Because the full suite was not green, the model-routing line in `todo.md` is intentionally unchanged and no second full-suite run was started.
+
+## Fix Round 1
+
+- RED: `integration_test.bash` required the generated Nexus prohibition to contain `Never ask a subagent to create sibling or nested Cyberpunk agents` contiguously, while `render_native_agent_body` split that exact sentence across two lines.
+- GREEN: the smallest renderer change keeps the sentence on one line; one persistent `bash tests/integration_test.bash` run passed.
+- Final suite: one persistent `bash tests/run.sh` run passed agent, CLI, documentation, integration, protocol, and the initial runtime-adapter cases. It then exited during the runtime-adapter project-skill normalization case after emitting `awk: newline in string` for a newline-containing fixture value.
+- The model-routing todo remains unchanged because that final full suite did not pass. No additional full-suite retry was started.
