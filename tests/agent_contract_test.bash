@@ -31,7 +31,7 @@ done
 
 test_start "Nexus owns adaptive integration-branch delivery"
 nexus="$(<"$AGENT_ROOT/nexus.md")"
-for value in "adaptive" "integration branch" "dependency order" "worktree" "cleanup" "delivery" "spawn" "resume" "steer" "interrupt" "replace" "ready queue" "three active subagents" "fresh Gatekeeper" "assembled-change review"; do
+for value in "adaptive" "integration branch" "dependency order" "worktree" "cleanup" "delivery" "spawn" "resume" "steer" "interrupt" "replace" "ready queue" "effective_limit" "parallelism: sequential" "fresh Gatekeeper" "assembled-change review"; do
     assert_contains "$nexus" "$value" "Nexus responsibility"
 done
 
@@ -62,8 +62,13 @@ for value in "non-overlapping" "integration contract" "dependencies" "allowed sc
     assert_contains "$fragmenter" "$value" "Fragmenter packet safeguard"
 done
 gatekeeper="$(<"$AGENT_ROOT/gatekeeper.md")"
-for value in "independently" "rerun" "result commit" "fresh" "review_agent_instance" "review_context: fresh" "verification_observed" "review_status: approved" "assembled"; do
+for value in "independently" "rerun" "result commit" "fresh" "review_agent_instance" "review_context: fresh" "review_context: parent" "parent-session fallback" "verification_observed" "review_status: approved" "assembled"; do
     assert_contains "$gatekeeper" "$value" "Gatekeeper fresh review safeguard"
+done
+
+for value in "interactive Fixer discovery" "parent conversation" "non-interactive Fixer analysis"; do
+    assert_contains "$nexus" "$value" "Nexus Fixer dispatch boundary"
+    assert_contains "$common" "$value" "common Fixer dispatch boundary"
 done
 
 test_start "Fixer owns approved PRD creation and handoff gates"

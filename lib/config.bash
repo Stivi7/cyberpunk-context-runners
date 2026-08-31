@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+if ! type require_confined_project_destination >/dev/null 2>&1; then
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-paths.bash"
+fi
+
 SUPPORTED_RUNTIMES=(codex claude cursor)
 ROLE_IDS=(nexus fixer operator mind interrogator fragmenter coder daemon neon grid-master gatekeeper)
 
@@ -156,6 +160,8 @@ migrate_config_v1() {
     local section
     local found_version=false
 
+    require_confined_project_destination "$config_path" || return 1
+
     [[ -f "$config_path" ]] || {
         printf 'Configuration not found: %s\n' "$config_path" >&2
         return 1
@@ -179,7 +185,10 @@ migrate_config_v1() {
     fi
 
     config_dir="$(dirname "$config_path")"
-    temp_path="$config_dir/.config.yml.tmp.$$"
+    if ! temp_path="$(create_confined_project_sibling_temp "$config_path")"; then
+        printf 'Cannot create configuration temporary file in: %s\n' "$config_dir" >&2
+        return 1
+    fi
     trap 'rm -f "$temp_path"' RETURN
 
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -211,6 +220,8 @@ write_configured_runtimes() {
     local config_dir
     local enabled=""
 
+    require_confined_project_destination "$config_path" || return 1
+
     [[ -f "$config_path" ]] || {
         printf 'Configuration not found: %s\n' "$config_path" >&2
         return 1
@@ -233,7 +244,10 @@ EOF
     fi
 
     config_dir="$(dirname "$config_path")"
-    temp_path="$config_dir/.config.yml.tmp.$$"
+    if ! temp_path="$(create_confined_project_sibling_temp "$config_path")"; then
+        printf 'Cannot create configuration temporary file in: %s\n' "$config_dir" >&2
+        return 1
+    fi
     trap 'rm -f "$temp_path"' RETURN
     awk -v enabled="$enabled" '
         $0 == "runtimes:" { in_runtimes=1 }

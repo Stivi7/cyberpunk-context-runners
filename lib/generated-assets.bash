@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+if ! type require_confined_project_destination >/dev/null 2>&1; then
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/project-paths.bash"
+fi
+
 GENERATED_MANIFEST_PATH=""
 GENERATED_MANIFEST_INDEX=""
 GENERATED_MANIFEST_RECORDS=""
@@ -34,6 +38,7 @@ create_parent_directory() {
     local path="$1"
     local directory
 
+    require_confined_project_destination "$path" || return 1
     directory="$(dirname "$path")"
     if ! mkdir -p "$directory"; then
         printf 'Cannot create parent directory: %s\n' "$directory" >&2
@@ -43,12 +48,8 @@ create_parent_directory() {
 
 create_sibling_temp() {
     local path="$1"
-    local directory
-    local basename_value
 
-    directory="$(dirname "$path")"
-    basename_value="$(basename "$path")"
-    mktemp "$directory/.$basename_value.tmp.XXXXXX"
+    create_confined_project_sibling_temp "$path"
 }
 
 discard_temp_file() {
@@ -68,6 +69,11 @@ discard_temp_file() {
 commit_temp_file() {
     local temporary="$1"
     local destination="$2"
+
+    require_confined_project_destination "$destination" || {
+        discard_temp_file "$temporary" || true
+        return 1
+    }
 
     if generated_path_exists "$destination" && [[ ! -f "$destination" || -L "$destination" ]]; then
         printf 'Refusing to replace non-regular destination: %s\n' "$destination" >&2
@@ -317,6 +323,7 @@ begin_generated_manifest() {
     local record_identifier
     local record_hash
 
+    require_confined_project_destination "$manifest_path" || return 1
     cleanup_generated_manifest
     GENERATED_MANIFEST_PATH="$manifest_path"
     if [[ -L "$manifest_path" || (-e "$manifest_path" && ! -f "$manifest_path") ]]; then
@@ -485,6 +492,10 @@ retire_generated_asset() {
         GENERATED_MANIFEST_FAILED=true
         return 1
     fi
+    if ! require_confined_project_destination "$destination"; then
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
     if ! prior_record="$(find_generated_record "$relative_path" "$GENERATED_MANIFEST_INDEX")"; then
         return 0
     fi
@@ -637,6 +648,10 @@ write_generated_asset() {
         ! validate_generated_manifest_field runtime "$runtime" ||
         ! validate_generated_manifest_field kind "$kind" ||
         ! validate_generated_manifest_field identifier "$identifier"; then
+        GENERATED_MANIFEST_FAILED=true
+        return 1
+    fi
+    if ! require_confined_project_destination "$destination"; then
         GENERATED_MANIFEST_FAILED=true
         return 1
     fi
@@ -836,6 +851,7 @@ install_staged_generated_assets() {
 
     while IFS=$'\t' read -r destination staged_content expected_state expected_hash; do
         [[ -n "$destination" && -n "$staged_content" ]] || continue
+        require_confined_project_destination "$destination" || return 1
         case "$expected_state" in
             absent)
                 if generated_path_exists "$destination"; then
@@ -886,6 +902,10 @@ install_staged_generated_assets() {
 
         existed=false
         backup="-"
+        require_confined_project_destination "$destination_dir/$destination_name" || {
+            discard_temp_file "$install_temp" || true
+            return 1
+        }
         if ! backup_dir="$(mktemp -d "$destination_dir/.$destination_name.rollback.XXXXXX")"; then
             printf 'Cannot create generated rollback directory for: %s\n' "$destination" >&2
             discard_temp_file "$install_temp" || true
@@ -967,6 +987,7 @@ retire_staged_generated_assets() {
     fi
     while IFS=$'\t' read -r destination expected_hash; do
         [[ -n "$destination" && -n "$expected_hash" ]] || continue
+        require_confined_project_destination "$destination" || return 1
         if [[ ! -f "$destination" || -L "$destination" ]]; then
             printf 'Generated asset drift after staging: %s changed type or disappeared\n' "$destination" >&2
             return 1
@@ -982,6 +1003,7 @@ retire_staged_generated_assets() {
         destination_display_dir="$(dirname "$destination")"
         destination_dir="$(cd "$destination_display_dir" && pwd -P)"
         destination_name="$(basename "$destination")"
+        require_confined_project_destination "$destination_dir/$destination_name" || return 1
         if ! backup_dir="$(mktemp -d "$destination_dir/.$destination_name.rollback.XXXXXX")"; then
             printf 'Cannot create generated rollback directory for: %s\n' "$destination" >&2
             return 1
@@ -1113,6 +1135,7 @@ finish_generated_manifest() {
     local manifest_dir
     local temporary
 
+    require_confined_project_destination "$GENERATED_MANIFEST_PATH" || return 1
     if [[ "$GENERATED_MANIFEST_FAILED" == true ]]; then
         cleanup_generated_manifest
         return 1
@@ -1191,6 +1214,7 @@ update_managed_block() {
     local temporary
     local last_byte
 
+    require_confined_project_destination "$path" || return 1
     if [[ ! -f "$body_file" || -L "$body_file" ]]; then
         printf 'Managed block body is not a regular file: %s\n' "$body_file" >&2
         return 1
@@ -1299,6 +1323,7 @@ ensure_codex_agent_settings() {
     local next_table_line
     local last_byte
 
+    require_confined_project_destination "$path" || return 1
     if [[ ! -f "$path" ]]; then
         if [[ "${DRY_RUN:-false}" == true ]]; then
             return 0

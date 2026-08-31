@@ -9,7 +9,7 @@ The CLI copies this tree into a target project. Canonical policy lives under `.c
 - Extra files under `skills/project/` are user-owned and never overwritten or deleted.
 - `.cyberpunk/runs/` is created locally and ignored rather than shipped as tracked history.
 - `.cyberpunk/generated.yml` records Cyberpunk-owned native assets and their hashes. Modified generated files require `--force`; unknown files at owned paths are collisions rather than overwrite targets.
-- Version-1 configuration migrates during `sync`; migration is idempotent. `validate` diagnoses configuration, manifests, collisions, and drift, while `status` does not prove live capability.
+- Version-1 configuration migration is idempotent. A stale canonical workflow, roles, or skills requires a reviewed canonical-protocol upgrade before `sync`; ordinary sync preserves those files. `validate` diagnoses the upgrade requirement, configuration, manifests, collisions, and drift, while `status` does not prove live capability.
 
 ## Main Areas
 
@@ -26,6 +26,6 @@ The CLI copies this tree into a target project. Canonical policy lives under `.c
 - Claude Code: `.claude/agents/` and `.claude/skills/`, with a bounded managed block in `CLAUDE.md`
 - Cursor: `.cursor/agents/`, `.cursor/skills/`, and `.cursor/rules/cyberpunk.mdc`
 
-These files are generated pointers, not a second workflow. Inspect them in the relevant runtime or on disk, then give work to Nexus in the runtime you started; the Bash CLI does not start agents. `max_concurrent_agents: 3` is a safety cap. Nexus is the sole dispatcher, dependency-bound roles remain sequential, a full queue waits, and worktree isolation does not start agents. Native model profiles are configured per runtime; a rejected preferred model retries once with `inherit`, with observed execution recorded in local run state and delivery rather than inferred from configuration. Project skills are registered only when explicitly enabled in `skills.enabled_project`.
+These files are generated pointers, not a second workflow. Inspect them in the relevant runtime or on disk, then give work to Nexus in the runtime you started; the Bash CLI does not start agents. `max_concurrent_agents: 3` is a safety cap. Nexus uses the minimum of the configured maximum, the observed runtime cap, and three; `parallelism: sequential` makes that limit one. Nexus is the sole dispatcher, dependency-bound roles remain sequential, a full queue waits, and worktree isolation does not start agents. Keep interactive Fixer discovery in the parent conversation; non-interactive Fixer analysis may use a native subagent. Native Gatekeeper review is fresh, while parent fallback records `review_context: parent` and a `null` identity. Native model profiles are configured per runtime; a rejected preferred model retries once with `inherit`, with observed execution recorded in local run state and delivery rather than inferred from configuration. Project skills are registered only when explicitly enabled in `skills.enabled_project`.
 
 The templates do not prescribe a language, framework, package manager, cloud, architecture style, or universal quality threshold. The Operator discovers project-specific commands and conventions from repository evidence.

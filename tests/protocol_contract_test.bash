@@ -26,6 +26,7 @@ assert_file "$DECISIONS"
 assert_file "$PATTERNS"
 assert_file "$LESSONS"
 assert_file "$TEMPLATE_ROOT/specs/.gitkeep"
+assert_contains "$(<"$WORKFLOW")" "Protocol version: 2" "canonical protocol version marker"
 
 test_start "configuration is adaptive and integration-branch based"
 config_content="$(<"$CONFIG")"
@@ -106,9 +107,17 @@ for value in \
     assert_contains "$workflow_content" "$value" "native dispatch and observed execution"
 done
 for value in \
+    "parallelism: sequential" \
+    "effective_limit" \
+    "minimum of the configured maximum, the observed runtime cap, and three" \
+    "never dispatches above"; do
+    assert_contains "$workflow_content" "$value" "effective dispatch limit"
+done
+for value in \
     "integration_owner: null" \
     "integration_contract: null" \
     "allowed_scope:" \
+    "schema_version: 2" \
     "review_agent_instance:" \
     "review_context: fresh" \
     "verification_observed:" \
@@ -120,6 +129,7 @@ for value in \
     assert_contains "$workflow_content" "$value" "run-state evidence schema"
 done
 assert_contains "$workflow_content" 'Legacy `run.yml`' "legacy run-state compatibility"
+assert_contains "$workflow_content" 'pre-0.4 `state.yml`' "legacy state schema compatibility"
 
 test_start "fallback vocabulary records the only supported observed model recovery"
 for value in \
@@ -187,8 +197,19 @@ for value in \
     "prd_commit:" \
     "user_authorized_handoff: true" \
     "continue sequentially" \
+    "Interactive Fixer discovery remains in the parent conversation" \
+    "Non-interactive Fixer analysis may use a native subagent" \
     "does not repeat discovery"; do
     assert_contains "$workflow_content" "$value" "Fixer workflow contract"
+done
+
+test_start "fresh Gatekeeper evidence is conditional on native delegation"
+for value in \
+    "When native delegation is available" \
+    "review_agent_instance: null" \
+    "review_context: parent" \
+    "parent-session fallback"; do
+    assert_contains "$workflow_content" "$value" "conditional Gatekeeper evidence"
 done
 
 nexus_content="$(<"$NEXUS")"
