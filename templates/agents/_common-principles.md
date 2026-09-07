@@ -34,7 +34,7 @@ Inspect skill metadata first, then fully read only the required and triggered sk
 
 ## Worktrees
 
-Every mutating assignment uses its own worker branch and worktree. Commit verified results there, return the commit SHA, and wait for Gatekeeper approval before Nexus integrates it. Read-only roles do not create worktrees unnecessarily.
+Every mutating implementation assignment uses its own worker branch and worktree. Commit verified results there, return the commit SHA, and wait for Gatekeeper approval before Nexus integrates it. Read-only roles do not create worktrees unnecessarily. The only planning-artifact exception is an approved PRD that The Fixer commits by itself on the current named branch after design and artifact approval; the exception never includes implementation or unrelated files.
 
 ## Learning
 

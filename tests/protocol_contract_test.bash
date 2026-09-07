@@ -12,6 +12,9 @@ PROJECT="$TEMPLATE_ROOT/.cyberpunk/project.md"
 DECISIONS="$TEMPLATE_ROOT/.cyberpunk/memory/decisions.md"
 PATTERNS="$TEMPLATE_ROOT/.cyberpunk/memory/patterns.md"
 LESSONS="$TEMPLATE_ROOT/.cyberpunk/memory/lessons.md"
+NEXUS="$TEMPLATE_ROOT/agents/nexus.md"
+COMMON_PRINCIPLES="$TEMPLATE_ROOT/agents/_common-principles.md"
+WORKTREE_SKILL="$TEMPLATE_ROOT/skills/core/worktree-isolation/SKILL.md"
 
 test_start "canonical protocol files exist"
 assert_file "$CONFIG"
@@ -71,6 +74,47 @@ for value in \
     "merged" \
     "protected branch"; do
     assert_contains "$workflow_content" "$value" "worktree lifecycle"
+done
+
+test_start "requirements discovery routes safely and hands off a committed PRD"
+for value in \
+    "## Requirements Discovery" \
+    "new product, feature, or architectural" \
+    "routine bug fix or maintenance" \
+    "specs/YYYY-MM-DD-<topic>-prd.md" \
+    "current named branch" \
+    "planning-artifact exception" \
+    "source: fixer" \
+    "discovery_complete: true" \
+    "prd_commit:" \
+    "user_authorized_handoff: true" \
+    "continue sequentially" \
+    "does not repeat discovery"; do
+    assert_contains "$workflow_content" "$value" "Fixer workflow contract"
+done
+
+nexus_content="$(<"$NEXUS")"
+for value in \
+    "The Fixer" \
+    "approved PRD" \
+    "discovery_complete: true" \
+    "does not repeat completed discovery"; do
+    assert_contains "$nexus_content" "$value" "Nexus discovery routing"
+done
+
+common_principles="$(<"$COMMON_PRINCIPLES")"
+for value in "planning-artifact exception" "approved PRD" "current named branch"; do
+    assert_contains "$common_principles" "$value" "PRD worktree exception"
+done
+
+worktree_skill="$(<"$WORKTREE_SKILL")"
+for value in \
+    "mutating implementation" \
+    "only approved planning-artifact exception" \
+    "approved PRD" \
+    "current named branch" \
+    "does not exempt implementation"; do
+    assert_contains "$worktree_skill" "$value" "worktree skill PRD exception"
 done
 
 test_start "project context uses conceptual command categories"

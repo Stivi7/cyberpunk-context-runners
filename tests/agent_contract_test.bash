@@ -6,7 +6,7 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$TESTS_DIR/test_helper.bash"
 
 AGENT_ROOT="$REPO_ROOT/templates/agents"
-agents=(nexus operator mind interrogator fragmenter coder daemon neon grid-master gatekeeper)
+agents=(nexus fixer operator mind interrogator fragmenter coder daemon neon grid-master gatekeeper)
 required_headings=(
     "## Mission"
     "## Owns"
@@ -48,6 +48,21 @@ gatekeeper="$(<"$AGENT_ROOT/gatekeeper.md")"
 assert_contains "$gatekeeper" "independently"
 assert_contains "$gatekeeper" "rerun"
 assert_contains "$gatekeeper" "result commit"
+
+test_start "Fixer owns approved PRD creation and handoff gates"
+fixer="$(<"$AGENT_ROOT/fixer.md")"
+for value in \
+    "requirements-discovery" \
+    "specs/YYYY-MM-DD-<topic>-prd.md" \
+    "current named branch" \
+    "commit only the approved PRD" \
+    "The Fixer must ask whether to hand the committed PRD to Nexus." \
+    "does not implement"; do
+    assert_contains "$fixer" "$value" "Fixer responsibility"
+done
+handoff_obligation_count="$(grep -Fxc -- "- The Fixer must ask whether to hand the committed PRD to Nexus." "$AGENT_ROOT/fixer.md")"
+assert_eq "1" "$handoff_obligation_count" "Fixer handoff obligation must have one normative bullet"
+assert_not_contains "$fixer" "- Asking whether to hand the committed PRD to Nexus." "Fixer handoff obligation must not be duplicated"
 
 test_start "agent defaults are runtime neutral"
 for agent in "${agents[@]}"; do

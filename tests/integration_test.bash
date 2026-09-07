@@ -29,6 +29,8 @@ assert_exit 0 run_cli "$project" validate
 assert_file "$project/AGENTS.md"
 assert_file "$project/CLAUDE.md"
 assert_file "$project/.cursor/rules/rules.mdc"
+assert_file "$project/agents/fixer.md"
+assert_file "$project/skills/core/requirements-discovery/SKILL.md"
 
 test_start "every agent default skill resolves"
 for agent_file in "$project"/agents/*.md; do
@@ -48,6 +50,17 @@ for agent_file in "$project"/agents/*.md; do
             }
         ' "$agent_file"
     )
+done
+
+test_start "generated Fixer exposes the committed PRD handoff"
+fixer_contract="$(<"$project/agents/fixer.md")$(<"$project/skills/core/requirements-discovery/SKILL.md")$(<"$project/.cyberpunk/workflow.md")"
+for value in \
+    "requirements-discovery" \
+    "specs/YYYY-MM-DD-<topic>-prd.md" \
+    "current named branch" \
+    "discovery_complete: true" \
+    "user_authorized_handoff: true"; do
+    assert_contains "$fixer_contract" "$value" "generated Fixer handoff"
 done
 
 test_start "local run and worktree paths are ignored"
