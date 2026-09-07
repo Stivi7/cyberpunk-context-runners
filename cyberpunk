@@ -4,10 +4,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
-VERSION="0.3.0"
+VERSION="0.4.0"
 
 DRY_RUN=false
 FORCE=false
+REQUESTED_RUNTIMES=()
+
+source "$SCRIPT_DIR/lib/project-paths.bash"
+source "$SCRIPT_DIR/lib/config.bash"
+source "$SCRIPT_DIR/lib/generated-assets.bash"
 
 REQUIRED_FILES=(
     ".cyberpunk/config.yml"
@@ -54,7 +59,8 @@ show_usage() {
 Cyberpunk CLI v$VERSION
 
 USAGE:
-    cyberpunk init [--dry-run] [--force]
+    cyberpunk init [--runtime codex|claude|cursor|all]... [--dry-run] [--force]
+    cyberpunk sync [--dry-run] [--force]
     cyberpunk validate
     cyberpunk status
     cyberpunk --help
@@ -66,6 +72,7 @@ COMMANDS:
     status      Report project, agent, skill, and local-run state
 
 INIT OPTIONS:
+    --runtime    Select a runtime; may be specified more than once
     --dry-run   Preview operations without writing files
     --force     Refresh framework-owned template files
 EOF
@@ -73,6 +80,19 @@ EOF
 
 show_version() {
     echo "Cyberpunk CLI v$VERSION"
+}
+
+canonical_protocol_is_current() {
+    [[ -f .cyberpunk/workflow.md && ! -L .cyberpunk/workflow.md ]] &&
+        grep -Fqx '**Protocol version: 2**' .cyberpunk/workflow.md
+}
+
+require_current_canonical_protocol() {
+    if canonical_protocol_is_current; then
+        return 0
+    fi
+    log_error "Canonical protocol upgrade required: review the canonical workflow, roles, and skills, then run cyberpunk init --force to accept the reviewed version-2 policy before sync. Existing canonical files were preserved."
+    return 1
 }
 
 validate_templates() {
@@ -84,6 +104,8 @@ validate_templates() {
 
 create_directory() {
     local path="$1"
+
+    require_confined_project_destination "$path" || return 1
 
     if [[ -d "$path" ]]; then
         return 0
@@ -103,6 +125,8 @@ copy_template_file() {
     local destination="$2"
     local destination_dir
     destination_dir="$(dirname "$destination")"
+
+    require_confined_project_destination "$destination" || return 1
 
     create_directory "$destination_dir"
 
@@ -141,6 +165,11 @@ copy_template_tree() {
         if [[ -d "$source" ]]; then
             create_directory "$destination"
         elif [[ -f "$source" ]]; then
+            case "$relative" in
+                AGENTS.md|CLAUDE.md|.cursor/rules/rules.mdc|.cursor/rules/cyberpunk.mdc|.codex/config.toml|.cyberpunk/generated.yml|.codex/agents/*|.claude/agents/*|.cursor/agents/*|.agents/skills/*|.claude/skills/*|.cursor/skills/*)
+                    continue
+                    ;;
+            esac
             copy_template_file "$source" "$destination"
             file_count=$((file_count + 1))
         fi
@@ -182,6 +211,8 @@ ensure_ignore_entries() {
         "$(configured_worktree_ignore)"
     )
 
+    require_confined_project_destination "$ignore_file" || return 1
+
     for entry in "${entries[@]}"; do
         if ! ignore_entry_exists "$entry" "$ignore_file"; then
             missing_count=$((missing_count + 1))
@@ -203,6 +234,9 @@ ensure_ignore_entries() {
 }
 
 init_project() {
+    local existing_config=false
+
+    [[ -f ".cyberpunk/config.yml" ]] && existing_config=true
     validate_templates
 
     if [[ "$DRY_RUN" == true ]]; then
@@ -210,6 +244,20 @@ init_project() {
     fi
 
     copy_template_tree
+    if [[ -f ".cyberpunk/config.yml" ]]; then
+        require_current_canonical_protocol || return 1
+        migrate_config_v1 ".cyberpunk/config.yml"
+        if [[ ${#REQUESTED_RUNTIMES[@]} -gt 0 ]]; then
+            if [[ "$existing_config" == true ]]; then
+                merge_configured_runtimes ".cyberpunk/config.yml" "${REQUESTED_RUNTIMES[@]}"
+            else
+                write_configured_runtimes ".cyberpunk/config.yml" "${REQUESTED_RUNTIMES[@]}"
+            fi
+        else
+            merge_configured_runtimes ".cyberpunk/config.yml" all
+        fi
+        sync_project
+    fi
     ensure_local_state
     ensure_ignore_entries
 
@@ -221,12 +269,1471 @@ init_project() {
     fi
 }
 
+role_description() {
+    case "$1" in
+        nexus) printf '%s\n' "Parent engineering coordinator for complete Cyberpunk task delivery" ;;
+        fixer) printf '%s\n' "Product requirements discovery for unresolved product or feature decisions" ;;
+        operator) printf '%s\n' "Read-only repository discovery and verification-command mapping" ;;
+        mind) printf '%s\n' "Architecture and implementation planning from approved requirements" ;;
+        interrogator) printf '%s\n' "Adversarial review of complex implementation plans" ;;
+        fragmenter) printf '%s\n' "Dependency-aware work decomposition and safe ownership boundaries" ;;
+        coder) printf '%s\n' "General scoped implementation following an approved work packet" ;;
+        daemon) printf '%s\n' "Backend, API, persistence, and domain-logic implementation" ;;
+        neon) printf '%s\n' "Frontend, interaction, accessibility, and responsive implementation" ;;
+        grid-master) printf '%s\n' "Platform, automation, observability, and operational implementation" ;;
+        gatekeeper) printf '%s\n' "Fresh-context review of a result commit or assembled change" ;;
+        *)
+            log_error "Unknown role: $1"
+            return 1
+            ;;
+    esac
+}
+
+validate_native_agent_value() {
+    local field="$1"
+    local value="$2"
+
+    if [[ -z "$value" ]]; then
+        log_error "Native agent $field must not be empty"
+        return 1
+    fi
+    case "$value" in
+        *$'\n'*|*$'\r'*)
+            log_error "Native agent $field contains an unsupported newline"
+            return 1
+            ;;
+    esac
+    if [[ "$field" == identifier && "$value" == *'"'* ]]; then
+        log_error "Native agent identifier contains an unsupported quote"
+        return 1
+    fi
+}
+
+escape_native_quoted_string() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+render_native_agent_body() {
+    local role="$1"
+
+    cat <<EOF
+Read \`.cyberpunk/workflow.md\`, \`agents/_common-principles.md\`, and
+\`agents/$role.md\` completely. Read the assigned work packet, result
+evidence, and every required skill before acting. Follow canonical policy;
+this file contains no replacement workflow. Return the role's output contract.
+EOF
+    if [[ "$role" == nexus ]]; then
+        cat <<'EOF'
+You are the parent and sole Cyberpunk dispatcher. Spawn, steer, resume, interrupt,
+and replace native subagents only as the canonical workflow permits. Never ask a subagent to create sibling or nested Cyberpunk agents.
+EOF
+    else
+        printf '%s\n' 'Do not spawn, delegate, or coordinate sibling or nested Cyberpunk agents.'
+    fi
+}
+
+render_native_agent() {
+    local runtime="$1"
+    local role="$2"
+    local model="$3"
+    local destination="$4"
+    local description
+
+    description="$(role_description "$role")" || return 1
+    validate_native_agent_value identifier "$role" || return 1
+    validate_native_agent_value model "$model" || return 1
+
+    case "$runtime" in
+        codex)
+            {
+                printf '%s\n' '# Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml.'
+                printf 'name = "%s"\n' "$(escape_native_quoted_string "$role")"
+                printf 'description = "%s"\n' "$(escape_native_quoted_string "$description")"
+                printf 'model = "%s"\n' "$(escape_native_quoted_string "$model")"
+                printf '%s\n' 'developer_instructions = """'
+                render_native_agent_body "$role"
+                printf '%s\n' '"""'
+            } > "$destination"
+            ;;
+        claude|cursor)
+            {
+                printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->'
+                printf '%s\n' '---'
+                printf 'name: "%s"\n' "$(escape_native_quoted_string "$role")"
+                printf 'description: "%s"\n' "$(escape_native_quoted_string "$description")"
+                printf 'model: "%s"\n' "$(escape_native_quoted_string "$model")"
+                printf '%s\n\n' '---'
+                render_native_agent_body "$role"
+            } > "$destination"
+            ;;
+        *)
+            log_error "Unknown runtime: $runtime"
+            return 1
+            ;;
+    esac
+}
+
+render_cursor_adapter() {
+    local destination="$1"
+
+    cat > "$destination" <<'EOF'
+<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->
+---
+description: Route project tasks through the runtime-neutral Cyberpunk engineering team
+globs:
+alwaysApply: true
+---
+
+# Cyberpunk Engineering Team Adapter
+
+Read `.cyberpunk/workflow.md` completely, act as Nexus in the parent session,
+and use Cursor's native Cyberpunk agents and skills. Dispatch dependency-ready
+independent work in parallel up to project policy limits.
+EOF
+}
+
+register_runtime_agents() {
+    local runtime="$1"
+    local role
+    local model
+    local content_file
+    local destination
+
+    for role in "${ROLE_IDS[@]}"; do
+        model="$(resolve_role_model ".cyberpunk/config.yml" "$role" "$runtime")"
+        if ! content_file="$(mktemp "$GENERATED_MANIFEST_WORKDIR/agent.XXXXXX")"; then
+            log_error "Cannot create native agent content file"
+            return 1
+        fi
+        if ! render_native_agent "$runtime" "$role" "$model" "$content_file"; then
+            rm -f "$content_file"
+            return 1
+        fi
+        case "$runtime" in
+            codex) destination=".codex/agents/$role.toml" ;;
+            claude) destination=".claude/agents/$role.md" ;;
+            cursor) destination=".cursor/agents/$role.md" ;;
+        esac
+        if ! write_generated_asset "$destination" "agents/$role.md" "$runtime" "agent" "$role" "$content_file"; then
+            rm -f "$content_file"
+            return 1
+        fi
+        if ! rm -f "$content_file"; then
+            return 1
+        fi
+    done
+}
+
+CANONICAL_SKILL_NAMES=("")
+CANONICAL_SKILL_DESCRIPTIONS=("")
+CANONICAL_SKILL_DESCRIPTION_YAMLS=("")
+CANONICAL_SKILL_SOURCES=("")
+CANONICAL_SKILL_COUNT=0
+
+validate_yaml_printable_utf8_file() {
+    local path="$1"
+    local byte_stream
+    local raw_byte
+    local byte=0
+    local codepoint=0
+    local minimum_codepoint=0
+    local continuation_count=0
+    local IFS=$' \t\n'
+
+    byte_stream="$(LC_ALL=C od -An -v -tu1 "$path")" || return 1
+    for raw_byte in $byte_stream; do
+        [[ "$raw_byte" =~ ^[0-9]+$ ]] || return 1
+        byte=$((10#$raw_byte))
+        ((byte <= 255)) || return 1
+
+        if ((continuation_count == 0)); then
+            if ((byte <= 0x7f)); then
+                if ((byte < 0x20)); then
+                    case "$byte" in
+                        9|10|13) ;;
+                        *) return 1 ;;
+                    esac
+                elif ((byte == 0x7f)); then
+                    return 1
+                fi
+                continue
+            fi
+
+            if ((byte >= 0xc2 && byte <= 0xdf)); then
+                codepoint=$((byte & 0x1f))
+                minimum_codepoint=0x80
+                continuation_count=1
+            elif ((byte >= 0xe0 && byte <= 0xef)); then
+                codepoint=$((byte & 0x0f))
+                minimum_codepoint=0x800
+                continuation_count=2
+            elif ((byte >= 0xf0 && byte <= 0xf4)); then
+                codepoint=$((byte & 0x07))
+                minimum_codepoint=0x10000
+                continuation_count=3
+            else
+                return 1
+            fi
+            continue
+        fi
+
+        ((byte >= 0x80 && byte <= 0xbf)) || return 1
+        codepoint=$(((codepoint << 6) | (byte & 0x3f)))
+        continuation_count=$((continuation_count - 1))
+        if ((continuation_count != 0)); then
+            continue
+        fi
+
+        if ((
+            codepoint < minimum_codepoint ||
+            codepoint > 0x10ffff ||
+            (codepoint >= 0xd800 && codepoint <= 0xdfff) ||
+            codepoint == 0xfffe ||
+            codepoint == 0xffff ||
+            (codepoint >= 0x80 && codepoint <= 0x9f && codepoint != 0x85)
+        )); then
+            return 1
+        fi
+    done
+
+    ((continuation_count == 0))
+}
+
+parse_canonical_skill_string() {
+    local field="$1"
+    local line="$2"
+    local value
+    local decoded=""
+    local character
+    local next_character
+    local index=0
+    local quoted=false
+    local plain_string_pattern='^[A-Za-z][A-Za-z0-9 .,;()/_+-]*$'
+
+    value="${line#"$field:"}"
+    case "$value" in
+        ' '*|$'\t'*) ;;
+        *) return 1 ;;
+    esac
+    while [[ "$value" == ' '* || "$value" == $'\t'* ]]; do
+        case "$value" in
+            ' '*) value="${value# }" ;;
+            $'\t'*) value="${value#$'\t'}" ;;
+        esac
+    done
+    while [[ "$value" == *' ' || "$value" == *$'\t' ]]; do
+        case "$value" in
+            *' ') value="${value% }" ;;
+            *$'\t') value="${value%$'\t'}" ;;
+        esac
+    done
+    if [[ -z "$value" ]]; then
+        return 1
+    fi
+
+    case "$value" in
+        \"*)
+            quoted=true
+            [[ "${value#\"}" != "$value" && "${value%\"}" != "$value" && ${#value} -ge 2 ]] || return 1
+            value="${value#\"}"
+            value="${value%\"}"
+            while [[ "$index" -lt "${#value}" ]]; do
+                character="${value:$index:1}"
+                if [[ "$character" == '\' ]]; then
+                    index=$((index + 1))
+                    [[ "$index" -lt "${#value}" ]] || return 1
+                    next_character="${value:$index:1}"
+                    case "$next_character" in
+                        '\'|\") decoded="$decoded$next_character" ;;
+                        *) return 1 ;;
+                    esac
+                elif [[ "$character" == \" ]]; then
+                    return 1
+                else
+                    decoded="$decoded$character"
+                fi
+                index=$((index + 1))
+            done
+            ;;
+        \'*)
+            quoted=true
+            [[ "${value#\'}" != "$value" && "${value%\'}" != "$value" && ${#value} -ge 2 ]] || return 1
+            value="${value#\'}"
+            value="${value%\'}"
+            while [[ "$index" -lt "${#value}" ]]; do
+                character="${value:$index:1}"
+                if [[ "$character" == "'" ]]; then
+                    index=$((index + 1))
+                    [[ "$index" -lt "${#value}" && "${value:$index:1}" == "'" ]] || return 1
+                fi
+                decoded="$decoded$character"
+                index=$((index + 1))
+            done
+            ;;
+        *)
+            case "$value" in
+                null|NULL|Null|true|TRUE|True|false|FALSE|False|yes|YES|Yes|no|NO|No|on|ON|On|off|OFF|Off)
+                    return 1
+                    ;;
+            esac
+            if [[ ! "$value" =~ $plain_string_pattern ]]; then
+                return 1
+            fi
+            decoded="$value"
+            ;;
+    esac
+
+    CANONICAL_SKILL_STRING="$decoded"
+    CANONICAL_SKILL_YAML_STRING="\"$(escape_native_quoted_string "$decoded")\""
+}
+
+read_canonical_skill_frontmatter() {
+    local path="$1"
+    local line
+    local delimiters=0
+    local name_count=0
+    local description_count=0
+    local name=""
+    local description=""
+    local description_yaml=""
+
+    validate_yaml_printable_utf8_file "$path" || {
+        log_error "Invalid canonical skill frontmatter: $path"
+        return 1
+    }
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        if [[ "$line" == "---" ]]; then
+            delimiters=$((delimiters + 1))
+            [[ "$delimiters" -eq 2 ]] && break
+            continue
+        fi
+        [[ "$delimiters" -eq 1 ]] || continue
+        case "$line" in
+            name:*)
+                name_count=$((name_count + 1))
+                parse_canonical_skill_string name "$line" || {
+                    log_error "Invalid canonical skill frontmatter: $path"
+                    return 1
+                }
+                name="$CANONICAL_SKILL_STRING"
+                ;;
+            description:*)
+                description_count=$((description_count + 1))
+                parse_canonical_skill_string description "$line" || {
+                    log_error "Invalid canonical skill frontmatter: $path"
+                    return 1
+                }
+                description="$CANONICAL_SKILL_STRING"
+                description_yaml="$CANONICAL_SKILL_YAML_STRING"
+                ;;
+        esac
+    done < "$path"
+
+    if [[ "$delimiters" -ne 2 || "$name_count" -ne 1 || "$description_count" -ne 1 || -z "$name" || -z "$description" ]]; then
+        log_error "Invalid canonical skill frontmatter: $path"
+        return 1
+    fi
+    CANONICAL_SKILL_NAME="$name"
+    CANONICAL_SKILL_DESCRIPTION="$description"
+    CANONICAL_SKILL_DESCRIPTION_YAML="$description_yaml"
+}
+
+discover_canonical_skill() {
+    local path="$1"
+    local source="$2"
+    local known_name
+    local index
+
+    read_canonical_skill_frontmatter "$path" || return 1
+    if [[ ! "$CANONICAL_SKILL_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        log_error "Invalid canonical skill identifier: $CANONICAL_SKILL_NAME"
+        return 1
+    fi
+    for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+        known_name="${CANONICAL_SKILL_NAMES[$index]}"
+        if [[ "$known_name" == "$CANONICAL_SKILL_NAME" ]]; then
+            log_error "Duplicate canonical skill identifier: $CANONICAL_SKILL_NAME"
+            return 1
+        fi
+    done
+    CANONICAL_SKILL_NAMES[$CANONICAL_SKILL_COUNT]="$CANONICAL_SKILL_NAME"
+    CANONICAL_SKILL_DESCRIPTIONS[$CANONICAL_SKILL_COUNT]="$CANONICAL_SKILL_DESCRIPTION"
+    CANONICAL_SKILL_DESCRIPTION_YAMLS[$CANONICAL_SKILL_COUNT]="$CANONICAL_SKILL_DESCRIPTION_YAML"
+    CANONICAL_SKILL_SOURCES[$CANONICAL_SKILL_COUNT]="$source"
+    CANONICAL_SKILL_COUNT=$((CANONICAL_SKILL_COUNT + 1))
+}
+
+resolve_skill_path() {
+    local path="$1"
+    local target
+    local directory
+
+    while [[ -L "$path" ]]; do
+        target="$(readlink "$path")" || return 1
+        case "$target" in
+            /*) path="$target" ;;
+            *) path="$(dirname "$path")/$target" ;;
+        esac
+    done
+    directory="$(cd -P "$(dirname "$path")" && pwd -P)" || return 1
+    printf '%s/%s\n' "$directory" "$(basename "$path")"
+}
+
+discover_canonical_skills() {
+    local path
+    local identifier
+    local index
+    local expected_name
+    local project_skill_root
+    local resolved_skill_path
+
+    CANONICAL_SKILL_NAMES=("")
+    CANONICAL_SKILL_DESCRIPTIONS=("")
+    CANONICAL_SKILL_DESCRIPTION_YAMLS=("")
+    CANONICAL_SKILL_SOURCES=("")
+    CANONICAL_SKILL_COUNT=0
+
+    if [[ -d "skills/core" ]]; then
+        while IFS= read -r path; do
+            discover_canonical_skill "$path" "${path#./}" || return 1
+        done < <(find "skills/core" -mindepth 2 -maxdepth 2 -type f -name SKILL.md | LC_ALL=C sort)
+    fi
+
+    while IFS= read -r identifier; do
+        [[ -n "$identifier" ]] || continue
+        if [[ ! "$identifier" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+            log_error "Invalid enabled project skill identifier: $identifier"
+            return 1
+        fi
+        path="skills/project/$identifier/SKILL.md"
+        if [[ ! -f "$path" ]]; then
+            log_error "Enabled project skill is missing its canonical file: $identifier"
+            return 1
+        fi
+        project_skill_root="$(cd -P skills/project && pwd -P)" || return 1
+        resolved_skill_path="$(resolve_skill_path "$path")" || {
+            log_error "Cannot resolve enabled project skill: $identifier"
+            return 1
+        }
+        case "$resolved_skill_path" in
+            "$project_skill_root"/*) ;;
+            *)
+                log_error "Enabled project skill resolves outside skills/project: $identifier"
+                return 1
+                ;;
+        esac
+        discover_canonical_skill "$path" "$path" || return 1
+    done < <(configured_project_skills ".cyberpunk/config.yml")
+
+    for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+        path="${CANONICAL_SKILL_SOURCES[$index]}"
+        expected_name="$(basename "$(dirname "$path")")"
+        if [[ "${CANONICAL_SKILL_NAMES[$index]}" != "$expected_name" ]]; then
+            log_error "Canonical skill name must match its directory ($expected_name): $path"
+            return 1
+        fi
+    done
+}
+
+render_native_skill() {
+    local source="$1"
+    local name="$2"
+    local description_yaml="$3"
+    local destination="$4"
+
+    {
+        printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->'
+        printf '%s\n' '---'
+        printf 'name: "%s"\n' "$(escape_native_quoted_string "$name")"
+        printf 'description: %s\n' "$description_yaml"
+        printf '%s\n\n' '---'
+        printf 'Read `../../../%s` completely and follow it.\n' "$source"
+        printf '%s\n' 'Resolve every referenced script, template, reference, or asset relative to that canonical skill directory.'
+    } > "$destination"
+}
+
+register_runtime_skills() {
+    local runtime="$1"
+    local index
+    local source
+    local name
+    local description
+    local description_yaml
+    local destination
+    local content_file
+
+    for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+        source="${CANONICAL_SKILL_SOURCES[$index]}"
+        name="${CANONICAL_SKILL_NAMES[$index]}"
+        description="${CANONICAL_SKILL_DESCRIPTIONS[$index]}"
+        description_yaml="${CANONICAL_SKILL_DESCRIPTION_YAMLS[$index]}"
+        case "$runtime" in
+            codex) destination=".agents/skills/$name/SKILL.md" ;;
+            claude) destination=".claude/skills/$name/SKILL.md" ;;
+            cursor) destination=".cursor/skills/$name/SKILL.md" ;;
+            *)
+                log_error "Unknown runtime: $runtime"
+                return 1
+                ;;
+        esac
+        if ! content_file="$(mktemp "$GENERATED_MANIFEST_WORKDIR/skill.XXXXXX")"; then
+            log_error "Cannot create native skill content file"
+            return 1
+        fi
+        if ! render_native_skill "$source" "$name" "$description_yaml" "$content_file"; then
+            rm -f "$content_file"
+            return 1
+        fi
+        if ! write_generated_asset "$destination" "$source" "$runtime" "skill" "$name" "$content_file"; then
+            rm -f "$content_file"
+            return 1
+        fi
+        if ! rm -f "$content_file"; then
+            return 1
+        fi
+    done
+}
+
+is_current_canonical_skill_source() {
+    local source="$1"
+    local index
+
+    for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+        [[ "${CANONICAL_SKILL_SOURCES[$index]}" == "$source" ]] && return 0
+    done
+    return 1
+}
+
+is_native_skill_destination() {
+    local path="$1"
+    local runtime="$2"
+
+    case "$runtime:$path" in
+        codex:.agents/skills/*/SKILL.md|claude:.claude/skills/*/SKILL.md|cursor:.cursor/skills/*/SKILL.md)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+is_current_native_skill_destination() {
+    local path="$1"
+    local runtime="$2"
+    local index
+    local expected_path
+
+    for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+        case "$runtime" in
+            codex) expected_path=".agents/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+            claude) expected_path=".claude/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+            cursor) expected_path=".cursor/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+            *) return 1 ;;
+        esac
+        [[ "$path" == "$expected_path" ]] && return 0
+    done
+    return 1
+}
+
+retire_disabled_project_skill_wrappers() {
+    local path
+    local source
+    local runtime
+    local kind
+    local identifier
+    local hash
+
+    while IFS=$'\t' read -r path source runtime kind identifier hash; do
+        [[ "$kind" == skill && "$source" == skills/project/*/SKILL.md ]] || continue
+        is_native_skill_destination "$path" "$runtime" || continue
+        is_current_native_skill_destination "$path" "$runtime" && continue
+        is_current_canonical_skill_source "$source" && continue
+        retire_generated_asset "$path" || return 1
+    done < "$GENERATED_MANIFEST_INDEX"
+}
+
+sync_project() {
+    local runtime
+    local cursor_content=""
+
+    require_current_canonical_protocol || return 1
+    migrate_config_v1 ".cyberpunk/config.yml"
+    discover_canonical_skills
+    begin_generated_manifest ".cyberpunk/generated.yml"
+    if ! retire_disabled_project_skill_wrappers; then
+        cleanup_generated_manifest
+        return 1
+    fi
+
+    while IFS= read -r runtime; do
+        [[ -n "$runtime" ]] || continue
+        case "$runtime" in
+            codex)
+                if ! update_managed_block "AGENTS.md" "$TEMPLATES_DIR/AGENTS.md"; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! ensure_codex_agent_settings ".codex/config.toml"; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! register_runtime_agents codex; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! register_runtime_skills codex; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                ;;
+            claude)
+                if ! update_managed_block "CLAUDE.md" "$TEMPLATES_DIR/CLAUDE.md"; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! register_runtime_agents claude; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! register_runtime_skills claude; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                ;;
+            cursor)
+                cursor_content="$GENERATED_MANIFEST_WORKDIR/cursor.mdc"
+                if ! render_cursor_adapter "$cursor_content"; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! write_generated_asset ".cursor/rules/cyberpunk.mdc" ".cyberpunk/workflow.md" "cursor" "adapter" "cyberpunk" "$cursor_content"; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! rm -f "$cursor_content"; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! register_runtime_agents cursor; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                if ! register_runtime_skills cursor; then
+                    cleanup_generated_manifest
+                    return 1
+                fi
+                ;;
+        esac
+    done < <(configured_runtimes ".cyberpunk/config.yml")
+
+    finish_generated_manifest
+}
+
 validate_skill_frontmatter() {
     local path="$1"
     local content
     content="$(sed -n '1,/^---$/p' "$path" 2>/dev/null || true)"
 
     [[ "$content" == *"name:"* && "$content" == *"description:"* ]]
+}
+
+validate_managed_instruction_block() {
+    local path="$1"
+    local canonical="$2"
+    local start_count
+    local end_count
+    local start_line
+    local end_line
+
+    start_count="$(grep -Fxc '<!-- cyberpunk:start -->' "$path" 2>/dev/null || true)"
+    end_count="$(grep -Fxc '<!-- cyberpunk:end -->' "$path" 2>/dev/null || true)"
+    if [[ "$start_count" -ne 1 || "$end_count" -ne 1 ]]; then
+        log_error "Expected exactly one managed instruction block: $path"
+        return 1
+    fi
+    start_line="$(grep -Fn '<!-- cyberpunk:start -->' "$path" | cut -d: -f1)"
+    end_line="$(grep -Fn '<!-- cyberpunk:end -->' "$path" | cut -d: -f1)"
+    if [[ "$start_line" -ge "$end_line" ]]; then
+        log_error "Malformed managed instruction block: $path"
+        return 1
+    fi
+    if ! cmp -s <(sed -n "${start_line},${end_line}p" "$path") "$canonical"; then
+        log_error "Managed instruction block differs from canonical content: $path"
+        return 1
+    fi
+}
+
+validate_native_skill_wrapper() {
+    local path="$1"
+    local name="$2"
+    local description_yaml="$3"
+    local source="$4"
+    local expected
+
+    expected="$(mktemp "${TMPDIR:-/tmp}/cyberpunk-validate-skill.XXXXXX")" || return 1
+    if ! render_native_skill "$source" "$name" "$description_yaml" "$expected"; then
+        rm -f "$expected" || true
+        return 1
+    fi
+    if ! cmp -s "$path" "$expected"; then
+        log_error "Native skill wrapper differs from canonical registration: $path (expected source: ../../../$source)"
+        rm -f "$expected" || true
+        return 1
+    fi
+    rm -f "$expected"
+}
+
+validate_native_agent_registration() {
+    local path="$1"
+    local runtime="$2"
+    local role="$3"
+    local validation_dir="$4"
+    local model
+    local expected
+
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    model="$(resolve_role_model .cyberpunk/config.yml "$role" "$runtime")" || return 1
+    expected="$validation_dir/$runtime-$role.expected"
+    if ! render_native_agent "$runtime" "$role" "$model" "$expected"; then
+        return 1
+    fi
+    if ! cmp -s "$path" "$expected"; then
+        log_error "Native agent differs from current configuration: $path"
+        rm -f "$expected" || true
+        return 1
+    fi
+    rm -f "$expected"
+}
+
+validate_cursor_adapter_registration() {
+    local path="$1"
+    local validation_dir="$2"
+    local expected="$validation_dir/cursor-adapter.expected"
+
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    render_cursor_adapter "$expected" || return 1
+    if ! cmp -s "$path" "$expected"; then
+        log_error "Cursor adapter differs from current renderer: $path"
+        rm -f "$expected" || true
+        return 1
+    fi
+    rm -f "$expected"
+}
+
+validate_expected_generated_asset() {
+    local records="$1"
+    local path="$2"
+    local source="$3"
+    local runtime="$4"
+    local kind="$5"
+    local identifier="$6"
+    local record_count
+    local record
+    local record_source
+    local record_runtime
+    local record_kind
+    local record_identifier
+
+    record_count="$(awk -F $'\t' -v path="$path" '$1 == path { count++ } END { print count + 0 }' "$records")"
+    if [[ "$record_count" -eq 0 ]]; then
+        if [[ -e "$path" || -L "$path" ]]; then
+            log_error "Native identifier collision at expected path without manifest record: $path"
+        else
+            log_error "Missing expected generated asset: $path"
+        fi
+        return 1
+    fi
+    if [[ "$record_count" -ne 1 ]]; then
+        log_error "Duplicate expected generated asset record: $path"
+        return 1
+    fi
+    record="$(awk -F $'\t' -v path="$path" '$1 == path { print; exit }' "$records")"
+    IFS=$'\t' read -r _ record_source record_runtime record_kind record_identifier _ <<EOF
+$record
+EOF
+    if [[ "$record_source" != "$source" || "$record_runtime" != "$runtime" || "$record_kind" != "$kind" || "$record_identifier" != "$identifier" ]]; then
+        log_error "Generated asset record does not match expected registration: $path (expected: $runtime/$kind/$identifier from $source)"
+        return 1
+    fi
+}
+
+validate_generated_runtime_state() {
+    local manifest=".cyberpunk/generated.yml"
+    local validation_dir
+    local records
+    local runtime
+    local role
+    local index
+    local path
+    local source
+    local errors=0
+
+    if ! validate_generated_manifest "$manifest"; then
+        errors=$((errors + 1))
+    fi
+    if ! discover_canonical_skills; then
+        return 1
+    fi
+    if ! validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/cyberpunk-expected-assets.XXXXXX")"; then
+        log_error "Cannot create generated asset validation directory"
+        return 1
+    fi
+    records="$validation_dir/records.tsv"
+    if ! load_generated_manifest_records "$manifest" "$records"; then
+        rm -f "$records" || true
+        rmdir "$validation_dir" 2>/dev/null || true
+        return 1
+    fi
+
+    while IFS= read -r runtime; do
+        [[ -n "$runtime" ]] || continue
+        for role in "${ROLE_IDS[@]}"; do
+            case "$runtime" in
+                codex) path=".codex/agents/$role.toml" ;;
+                claude) path=".claude/agents/$role.md" ;;
+                cursor) path=".cursor/agents/$role.md" ;;
+            esac
+            if validate_expected_generated_asset "$records" "$path" "agents/$role.md" "$runtime" agent "$role"; then
+                validate_native_agent_registration "$path" "$runtime" "$role" "$validation_dir" || errors=$((errors + 1))
+            else
+                errors=$((errors + 1))
+            fi
+        done
+        for ((index = 0; index < CANONICAL_SKILL_COUNT; index++)); do
+            source="${CANONICAL_SKILL_SOURCES[$index]}"
+            case "$runtime" in
+                codex) path=".agents/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+                claude) path=".claude/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+                cursor) path=".cursor/skills/${CANONICAL_SKILL_NAMES[$index]}/SKILL.md" ;;
+            esac
+            if validate_expected_generated_asset "$records" "$path" "$source" "$runtime" skill "${CANONICAL_SKILL_NAMES[$index]}"; then
+                [[ -f "$path" ]] && validate_native_skill_wrapper "$path" "${CANONICAL_SKILL_NAMES[$index]}" "${CANONICAL_SKILL_DESCRIPTION_YAMLS[$index]}" "$source" || errors=$((errors + 1))
+            else
+                errors=$((errors + 1))
+            fi
+        done
+        case "$runtime" in
+            codex)
+                [[ -f AGENTS.md ]] && validate_managed_instruction_block AGENTS.md "$TEMPLATES_DIR/AGENTS.md" || errors=$((errors + 1))
+                ;;
+            claude)
+                [[ -f CLAUDE.md ]] && validate_managed_instruction_block CLAUDE.md "$TEMPLATES_DIR/CLAUDE.md" || errors=$((errors + 1))
+                ;;
+            cursor)
+                if validate_expected_generated_asset "$records" ".cursor/rules/cyberpunk.mdc" ".cyberpunk/workflow.md" cursor adapter cyberpunk; then
+                    validate_cursor_adapter_registration ".cursor/rules/cyberpunk.mdc" "$validation_dir" || errors=$((errors + 1))
+                else
+                    errors=$((errors + 1))
+                fi
+                ;;
+        esac
+    done < <(configured_runtimes .cyberpunk/config.yml)
+
+    rm -f "$records" || true
+    rmdir "$validation_dir" 2>/dev/null || true
+    [[ "$errors" -eq 0 ]]
+}
+
+mutable_scopes_overlap() {
+    local left="$1"
+    local right="$2"
+    local left_root="$left"
+    local right_root="$right"
+
+    [[ -n "$left" && -n "$right" ]] || return 1
+    [[ "$left" == "$right" ]] && return 0
+    if [[ "$left_root" == */\*\* ]]; then
+        left_root="${left_root:0:${#left_root}-3}"
+    fi
+    if [[ "$right_root" == */\*\* ]]; then
+        right_root="${right_root:0:${#right_root}-3}"
+    fi
+    left_root="${left_root%/}"
+    right_root="${right_root%/}"
+    [[ "$left_root" == . || "$right_root" == . ]] && return 0
+    [[ -n "$left_root" && -n "$right_root" ]] || return 0
+    [[ "$left_root" == "$right_root" || "$left_root" == "$right_root"/* || "$right_root" == "$left_root"/* ]] && return 0
+    return 1
+}
+
+normalize_recorded_mutable_scope() {
+    local input="$1"
+    local remaining="$input"
+    local component
+    local normalized=""
+    local root
+
+    case "$input" in
+        ""|/*|*$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+    esac
+    while :; do
+        case "$remaining" in
+            */*)
+                component="${remaining%%/*}"
+                remaining="${remaining#*/}"
+                ;;
+            *)
+                component="$remaining"
+                remaining=""
+                ;;
+        esac
+        case "$component" in
+            ""|.) ;;
+            ..) return 1 ;;
+            *)
+                if [[ -n "$normalized" ]]; then
+                    normalized="$normalized/$component"
+                else
+                    normalized="$component"
+                fi
+                ;;
+        esac
+        [[ -n "$remaining" ]] || break
+    done
+    [[ -n "$normalized" ]] || normalized=.
+
+    if [[ "$normalized" == */\*\* ]]; then
+        root="${normalized:0:${#normalized}-3}"
+        [[ -n "$root" ]] || return 1
+    else
+        root="$normalized"
+    fi
+    case "$root" in
+        *\**|*\?*|*\[*|*\]*) return 1 ;;
+    esac
+    case "$normalized" in
+        *\**|*\?*|*\[*|*\]*)
+            [[ "$normalized" == */\*\* ]] || return 1
+            ;;
+    esac
+    printf '%s\n' "$normalized"
+}
+
+is_pre_0_4_legacy_state() {
+    local state="$1"
+
+    awk '
+        function finish_job(    key) {
+            if (job == "") return
+            jobs++
+            split("agent branch worktree status result_commit review_status merged", required, / /)
+            for (key in required) {
+                if (job_key[required[key]] != 1) invalid=1
+                job_key[required[key]]=0
+            }
+        }
+        /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+        /^[^[:space:]]/ {
+            finish_job()
+            job=""
+            if (/^integration_branch:[[:space:]]*[^[:space:]]/) integration++
+            else if (/^base_commit:[[:space:]]*[^[:space:]]/) base++
+            else if ($0 == "jobs:") jobs_section++
+            else invalid=1
+            next
+        }
+        /^  [^[:space:]][^:]*:$/ {
+            if (jobs_section != 1) { invalid=1; next }
+            finish_job()
+            job=$0
+            next
+        }
+        /^    [^[:space:]][^:]*:[[:space:]]*[^[:space:]]/ {
+            if (job == "") { invalid=1; next }
+            key=$0
+            sub(/^    /, "", key)
+            sub(/:.*/, "", key)
+            if (key !~ /^(agent|branch|worktree|status|result_commit|review_status|merged)$/) invalid=1
+            job_key[key]++
+            next
+        }
+        { invalid=1 }
+        END {
+            finish_job()
+            if (integration != 1 || base != 1 || jobs_section != 1 || jobs < 1) invalid=1
+            exit invalid ? 1 : 0
+        }
+    ' "$state"
+}
+
+validate_recorded_run_state() {
+    local state
+    local maximum
+    local execution_mode
+    local fallback_used
+    local fallback_record
+    local fallback_category
+    local fallback_affected_jobs
+    local fallback_category_valid=false
+    local job_records
+    local job
+    local parallel_safe
+    local scopes
+    local native_agent
+    local agent_instance
+    local review_agent_instance
+    local review_context
+    local review_status
+    local result_commit
+    local verification_observed
+    local verification_skipped_reason
+    local assembled_record
+    local assembled_integrated_commit
+    local assembled_review_agent_instance
+    local assembled_review_context
+    local assembled_verification_observed
+    local assembled_verification_skipped_reason
+    local assembled_review_status
+    local per_result_reviewers
+    local review_fallback_exempt
+    local parent_session_review
+    local record_separator=$'\034'
+    local native_evidence=false
+    local parallel_claimed=false
+    local duplicate_scope
+    local prior_job
+    local prior_scope
+    local scope_job
+    local scope_path
+    local scope_parallel_safe
+    local normalized_scope
+    local state_records
+    local state_key_count
+    local seen_scopes=""
+    local errors=0
+
+    [[ -d .cyberpunk/runs ]] || return 0
+    while IFS= read -r state; do
+        native_evidence=false
+        if [[ ! -s "$state" ]]; then
+            log_error "Recorded run state is empty: $state"
+            errors=$((errors + 1))
+            continue
+        fi
+        if [[ "$state" == */state.yml ]]; then
+            if is_pre_0_4_legacy_state "$state"; then
+                continue
+            fi
+            if [[ "$(grep -Ec '^schema_version:[[:space:]]*2[[:space:]]*$' "$state" || true)" -ne 1 ]]; then
+                log_error "Current state.yml requires schema_version: 2: $state"
+                errors=$((errors + 1))
+            fi
+            state_records=(schema_version runtime execution_mode max_concurrent_agents jobs assembled_review fallback)
+        else
+            state_records=(runtime execution_mode max_concurrent_agents jobs fallback)
+        fi
+        for state_records in "${state_records[@]}"; do
+            case "$state_records" in
+                jobs|assembled_review|fallback) state_key_count="$(grep -Fxc "${state_records}:" "$state")" ;;
+                *) state_key_count="$(grep -Ec "^${state_records}:[[:space:]]*[^[:space:]]" "$state" || true)" ;;
+            esac
+            if [[ "$state_key_count" -ne 1 ]]; then
+                log_error "Recorded run state requires exactly one ${state_records} section/key: $state"
+                errors=$((errors + 1))
+            fi
+        done
+        maximum="$(sed -n 's/^max_concurrent_agents:[[:space:]]*//p' "$state" | head -n 1)"
+        if [[ -n "$maximum" && ( ! "$maximum" =~ ^[0-9]+$ || "$maximum" -lt 1 || "$maximum" -gt 3 ) ]]; then
+            log_error "Recorded run max_concurrent_agents must be an integer from 1 to 3: $state"
+            errors=$((errors + 1))
+        fi
+        execution_mode="$(sed -n 's/^execution_mode:[[:space:]]*//p' "$state" | head -n 1)"
+        fallback_used="$(awk '
+            $0 == "fallback:" { in_fallback=1; next }
+            in_fallback && /^[^[:space:]]/ { exit }
+            in_fallback && /^  used:[[:space:]]*/ {
+                value=$0
+                sub(/^  used:[[:space:]]*/, "", value)
+                print value
+                exit
+            }
+        ' "$state")"
+        if [[ "$(awk '$0 == "fallback:" { section++ } section == 1 && /^  used:[[:space:]]*/ { count++ } END { print count + 0 }' "$state")" -ne 1 ]]; then
+            log_error "Recorded run state requires exactly one fallback.used value: $state"
+            errors=$((errors + 1))
+        fi
+        if [[ "$execution_mode" == parallel ]] ||
+            grep -Eq '^[[:space:]]*(parallel_execution_claimed|parallel_delivery_claimed|delivery_parallel):[[:space:]]*true[[:space:]]*$' "$state"; then
+            parallel_claimed=true
+        else
+            parallel_claimed=false
+        fi
+        if LC_ALL=C grep -q "$record_separator" "$state"; then
+            log_error "Recorded run state contains an unsupported record delimiter: $state"
+            errors=$((errors + 1))
+            continue
+        fi
+
+        fallback_record="$(awk -v separator="$record_separator" '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function unquote(value) {
+                value=trim(value)
+                if (value ~ /^".*"$/) value=substr(value, 2, length(value) - 2)
+                return value
+            }
+            function append_job(value,    item, count, index_value) {
+                value=trim(value)
+                sub(/^\[/, "", value)
+                sub(/\]$/, "", value)
+                count=split(value, items, /,/)
+                for (index_value=1; index_value<=count; index_value++) {
+                    item=unquote(items[index_value])
+                    if (item != "") {
+                        if (affected_jobs != "") affected_jobs=affected_jobs ","
+                        affected_jobs=affected_jobs item
+                    }
+                }
+            }
+            $0 == "fallback:" { in_fallback=1; next }
+            in_fallback && /^[^[:space:]]/ { exit }
+            !in_fallback { next }
+            reading_jobs && /^    -[[:space:]]*/ {
+                value=$0
+                sub(/^    -[[:space:]]*/, "", value)
+                append_job(value)
+                next
+            }
+            reading_jobs { reading_jobs=0 }
+            /^  category:[[:space:]]*/ {
+                value=$0
+                sub(/^  category:[[:space:]]*/, "", value)
+                category=unquote(value)
+                next
+            }
+            /^  affected_jobs:[[:space:]]*$/ { reading_jobs=1; next }
+            /^  affected_jobs:[[:space:]]*/ {
+                value=$0
+                sub(/^  affected_jobs:[[:space:]]*/, "", value)
+                append_job(value)
+            }
+            END { print category separator affected_jobs }
+        ' "$state")"
+        IFS="$record_separator" read -r fallback_category fallback_affected_jobs <<EOF
+$fallback_record
+EOF
+        fallback_category_valid=false
+        if [[ "$fallback_used" == true ]]; then
+            case "$fallback_category" in
+                native_tools_unavailable|delegation_disabled_by_policy|delegation_disabled_by_user|no_parallel_safe_packets|runtime_spawn_failure)
+                    fallback_category_valid=true
+                    ;;
+                *)
+                    log_error "Recorded fallback category is unsupported: $fallback_category ($state)"
+                    errors=$((errors + 1))
+                    ;;
+            esac
+        fi
+
+        job_records="$(awk -v separator="$record_separator" '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function unquote(value) {
+                value=trim(value)
+                if (value ~ /^".*"$/) {
+                    value=substr(value, 2, length(value) - 2)
+                }
+                return value
+            }
+            function append_scope(value,    item, count, index_value) {
+                value=trim(value)
+                sub(/^\[/, "", value)
+                sub(/\]$/, "", value)
+                count=split(value, items, /,/)
+                for (index_value=1; index_value<=count; index_value++) {
+                    item=unquote(items[index_value])
+                    if (item != "") {
+                        if (scopes != "") scopes=scopes ","
+                        scopes=scopes item
+                    }
+                }
+            }
+            function has_value(value) {
+                value=unquote(value)
+                normalized=value
+                sub(/^\[/, "", normalized)
+                sub(/\]$/, "", normalized)
+                normalized=trim(normalized)
+                return normalized != "" && normalized != "null"
+            }
+            function emit() {
+                if (job != "") print job separator parallel_safe separator scopes separator native_agent separator agent_instance separator review_agent_instance separator review_context separator review_status separator result_commit separator verification_observed separator verification_skipped_reason
+            }
+            $0 == "jobs:" { in_jobs=1; next }
+            in_jobs && /^[^[:space:]]/ { emit(); in_jobs=0; exit }
+            in_jobs && /^  [^[:space:]][^:]*:$/ {
+                emit()
+                job=$0
+                sub(/^  /, "", job)
+                sub(/:$/, "", job)
+                parallel_safe=scopes=native_agent=agent_instance=review_agent_instance=review_context=review_status=result_commit=verification_observed=verification_skipped_reason=""
+                reading_scope=reading_verification=0
+                next
+            }
+            !in_jobs || job == "" { next }
+            reading_scope && /^      -[[:space:]]*/ {
+                value=$0
+                sub(/^      -[[:space:]]*/, "", value)
+                append_scope(value)
+                next
+            }
+            reading_scope { reading_scope=0 }
+            reading_verification && /^      -[[:space:]]*/ {
+                value=$0
+                sub(/^      -[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            reading_verification { reading_verification=0 }
+            /^    allowed_scope:[[:space:]]*$/ { reading_scope=1; next }
+            /^    allowed_scope:[[:space:]]*\[/ {
+                value=$0
+                sub(/^    allowed_scope:[[:space:]]*/, "", value)
+                append_scope(value)
+                next
+            }
+            /^    parallel_safe:[[:space:]]*/ {
+                value=$0
+                sub(/^    parallel_safe:[[:space:]]*/, "", value)
+                parallel_safe=unquote(value)
+                next
+            }
+            /^    native_agent:[[:space:]]*/ {
+                value=$0
+                sub(/^    native_agent:[[:space:]]*/, "", value)
+                native_agent=unquote(value)
+                next
+            }
+            /^    agent_instance:[[:space:]]*/ {
+                value=$0
+                sub(/^    agent_instance:[[:space:]]*/, "", value)
+                agent_instance=unquote(value)
+                next
+            }
+            /^    review_agent_instance:[[:space:]]*/ {
+                value=$0
+                sub(/^    review_agent_instance:[[:space:]]*/, "", value)
+                review_agent_instance=unquote(value)
+                next
+            }
+            /^    review_context:[[:space:]]*/ {
+                value=$0
+                sub(/^    review_context:[[:space:]]*/, "", value)
+                review_context=unquote(value)
+                next
+            }
+            /^    review_status:[[:space:]]*/ {
+                value=$0
+                sub(/^    review_status:[[:space:]]*/, "", value)
+                review_status=unquote(value)
+                next
+            }
+            /^    result_commit:[[:space:]]*/ {
+                value=$0
+                sub(/^    result_commit:[[:space:]]*/, "", value)
+                result_commit=unquote(value)
+                next
+            }
+            /^    verification_observed:[[:space:]]*$/ { reading_verification=1; next }
+            /^    verification_observed:[[:space:]]*/ {
+                value=$0
+                sub(/^    verification_observed:[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            /^    verification_skipped_reason:[[:space:]]*/ {
+                value=$0
+                sub(/^    verification_skipped_reason:[[:space:]]*/, "", value)
+                verification_skipped_reason=unquote(value)
+            }
+            END { if (in_jobs) emit() }
+        ' "$state")"
+        if [[ -z "$job_records" ]]; then
+            log_error "Recorded run state has no job records: $state"
+            errors=$((errors + 1))
+        fi
+        scopes="$(printf '%s\n' "$job_records" | awk -F "$record_separator" '{ count=split($3, values, /,/); for (index_value=1; index_value<=count; index_value++) if (values[index_value] != "") print $1 "\t" $2 "\t" values[index_value] }')"
+        seen_scopes=""
+        while IFS=$'\t' read -r scope_job scope_parallel_safe scope_path; do
+            [[ -n "$scope_job" && -n "$scope_path" ]] || continue
+            if ! normalized_scope="$(normalize_recorded_mutable_scope "$scope_path")"; then
+                log_error "Recorded allowed_scope is not a supported project-relative path (exact path or terminal /** only): $scope_path ($state)"
+                errors=$((errors + 1))
+                continue
+            fi
+            scope_path="$normalized_scope"
+            [[ "$scope_parallel_safe" == true ]] || continue
+            while IFS=$'\t' read -r prior_job prior_scope; do
+                [[ -n "$prior_job" && "$prior_job" != "$scope_job" ]] || continue
+                if mutable_scopes_overlap "$prior_scope" "$scope_path"; then
+                    log_error "Recorded parallel-safe jobs overlap mutable scope: $prior_scope and $scope_path ($state)"
+                    errors=$((errors + 1))
+                fi
+            done <<EOF
+$seen_scopes
+EOF
+            seen_scopes="${seen_scopes}${scope_job}"$'\t'"${scope_path}"$'\n'
+        done <<EOF
+$scopes
+EOF
+        per_result_reviewers=""
+        while IFS="$record_separator" read -r job parallel_safe scopes native_agent agent_instance review_agent_instance review_context review_status result_commit verification_observed verification_skipped_reason; do
+            [[ -n "$job" ]] || continue
+            if [[ "$native_agent" != "" && "$native_agent" != null ]]; then
+                native_evidence=true
+            fi
+            review_fallback_exempt=false
+            if [[ "$fallback_used" == true && "$fallback_category_valid" == true && ",$fallback_affected_jobs," == *",$job,"* ]]; then
+                review_fallback_exempt=true
+            elif [[ "$fallback_used" == true && "$fallback_category_valid" == true && ",$fallback_affected_jobs," == *,all,* &&
+                ( "$fallback_category" == native_tools_unavailable || "$fallback_category" == delegation_disabled_by_policy || "$fallback_category" == delegation_disabled_by_user ) ]]; then
+                review_fallback_exempt=true
+            fi
+            parent_session_review=false
+            if [[ "$review_fallback_exempt" == true &&
+                ( "$native_agent" == "" || "$native_agent" == null ) &&
+                ( "$agent_instance" == "" || "$agent_instance" == null ) ]]; then
+                parent_session_review=true
+            fi
+            if [[ "$review_agent_instance" != "" && "$review_agent_instance" != null ]]; then
+                per_result_reviewers="${per_result_reviewers}${review_agent_instance}"$'\n'
+            fi
+            if [[ "$review_status" == approved ]]; then
+                if [[ "$parent_session_review" == true ]]; then
+                    if [[ "$review_agent_instance" != null || "$review_context" != parent ]]; then
+                        log_error "Approved parent-session fallback review requires null identity and parent context: $state (job: $job)"
+                        errors=$((errors + 1))
+                    fi
+                elif [[ "$review_agent_instance" == "" || "$review_agent_instance" == null || "$review_context" != fresh || "$review_agent_instance" == "$agent_instance" ]]; then
+                    log_error "Approved native review lacks fresh reviewer identity/context: $state (job: $job)"
+                    errors=$((errors + 1))
+                fi
+            fi
+            if [[ "$review_status" == approved && ( "$result_commit" == "" || "$result_commit" == null ) ]]; then
+                log_error "Approved review requires result_commit: $state (job: $job)"
+                errors=$((errors + 1))
+            fi
+            if [[ "$review_status" == approved && "$verification_observed" != observed &&
+                ( "$verification_skipped_reason" == "" || "$verification_skipped_reason" == null ) ]]; then
+                log_error "Approved review requires verification_observed or verification_skipped_reason: $state (job: $job)"
+                errors=$((errors + 1))
+            fi
+        done <<EOF
+$job_records
+EOF
+        assembled_record="$(awk -v separator="$record_separator" '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function unquote(value) {
+                value=trim(value)
+                if (value ~ /^".*"$/) value=substr(value, 2, length(value) - 2)
+                return value
+            }
+            function has_value(value) {
+                value=unquote(value)
+                normalized=value
+                sub(/^\[/, "", normalized)
+                sub(/\]$/, "", normalized)
+                normalized=trim(normalized)
+                return normalized != "" && normalized != "null"
+            }
+            $0 == "assembled_review:" { in_review=1; next }
+            in_review && /^[^[:space:]]/ { exit }
+            !in_review { next }
+            reading_verification && /^    -[[:space:]]*/ {
+                value=$0
+                sub(/^    -[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            reading_verification { reading_verification=0 }
+            /^  integrated_commit:[[:space:]]*/ {
+                value=$0
+                sub(/^  integrated_commit:[[:space:]]*/, "", value)
+                integrated_commit=unquote(value)
+                next
+            }
+            /^  review_agent_instance:[[:space:]]*/ {
+                value=$0
+                sub(/^  review_agent_instance:[[:space:]]*/, "", value)
+                review_agent_instance=unquote(value)
+                next
+            }
+            /^  review_context:[[:space:]]*/ {
+                value=$0
+                sub(/^  review_context:[[:space:]]*/, "", value)
+                review_context=unquote(value)
+                next
+            }
+            /^  review_status:[[:space:]]*/ {
+                value=$0
+                sub(/^  review_status:[[:space:]]*/, "", value)
+                review_status=unquote(value)
+                next
+            }
+            /^  verification_observed:[[:space:]]*$/ { reading_verification=1; next }
+            /^  verification_observed:[[:space:]]*/ {
+                value=$0
+                sub(/^  verification_observed:[[:space:]]*/, "", value)
+                if (has_value(value)) verification_observed="observed"
+                next
+            }
+            /^  verification_skipped_reason:[[:space:]]*/ {
+                value=$0
+                sub(/^  verification_skipped_reason:[[:space:]]*/, "", value)
+                verification_skipped_reason=unquote(value)
+            }
+            END { print integrated_commit separator review_agent_instance separator review_context separator verification_observed separator verification_skipped_reason separator review_status }
+        ' "$state")"
+        IFS="$record_separator" read -r assembled_integrated_commit assembled_review_agent_instance assembled_review_context assembled_verification_observed assembled_verification_skipped_reason assembled_review_status <<EOF
+$assembled_record
+EOF
+        if [[ "$assembled_review_status" == approved ]]; then
+            review_fallback_exempt=false
+            if [[ "$fallback_used" == true && "$fallback_category_valid" == true && ",$fallback_affected_jobs," == *,all,* &&
+                ( "$fallback_category" == native_tools_unavailable || "$fallback_category" == delegation_disabled_by_policy || "$fallback_category" == delegation_disabled_by_user ) ]]; then
+                review_fallback_exempt=true
+            fi
+            if [[ "$review_fallback_exempt" == true ]]; then
+                if [[ "$assembled_review_agent_instance" != null || "$assembled_review_context" != parent ]]; then
+                    log_error "Approved parent-session fallback review requires null identity and parent context: $state (assembled_review)"
+                    errors=$((errors + 1))
+                fi
+            elif [[ "$assembled_review_agent_instance" == "" || "$assembled_review_agent_instance" == null || "$assembled_review_context" != fresh ]]; then
+                log_error "Approved assembled review lacks fresh reviewer identity/context: $state"
+                errors=$((errors + 1))
+            fi
+            if [[ "$assembled_review_agent_instance" != "" && "$assembled_review_agent_instance" != null ]] &&
+                printf '%s' "$per_result_reviewers" | grep -Fqx -- "$assembled_review_agent_instance"; then
+                log_error "Approved assembled review reuses a per-result reviewer identity: $state"
+                errors=$((errors + 1))
+            fi
+            if [[ "$assembled_integrated_commit" == "" || "$assembled_integrated_commit" == null ]]; then
+                log_error "Approved assembled review requires integrated_commit: $state"
+                errors=$((errors + 1))
+            fi
+            if [[ "$assembled_verification_observed" != observed &&
+                ( "$assembled_verification_skipped_reason" == "" || "$assembled_verification_skipped_reason" == null ) ]]; then
+                log_error "Approved review requires verification_observed or verification_skipped_reason: $state (assembled_review)"
+                errors=$((errors + 1))
+            fi
+        fi
+        if [[ "$parallel_claimed" == true && "$native_evidence" != true ]]; then
+            log_error "Recorded parallel execution/delivery claim lacks native agent evidence: $state"
+            errors=$((errors + 1))
+        fi
+    done < <(find .cyberpunk/runs -mindepth 2 -maxdepth 2 -type f \( -name state.yml -o -name run.yml \) | LC_ALL=C sort)
+    [[ "$errors" -eq 0 ]]
 }
 
 validate_project() {
@@ -249,6 +1756,10 @@ validate_project() {
         "  merge_worker_branches: true"
         "  allow_protected_branch_merge: false"
     )
+
+    if ! require_current_canonical_protocol; then
+        error_count=$((error_count + 1))
+    fi
 
     for path in "${REQUIRED_FILES[@]}"; do
         if [[ ! -f "$path" ]]; then
@@ -280,6 +1791,18 @@ validate_project() {
                 error_count=$((error_count + 1))
             fi
         done
+        if ! validate_runtime_configuration ".cyberpunk/config.yml"; then
+            error_count=$((error_count + 1))
+        fi
+        if ! validate_model_configuration ".cyberpunk/config.yml"; then
+            error_count=$((error_count + 1))
+        fi
+        if ! validate_generated_runtime_state; then
+            error_count=$((error_count + 1))
+        fi
+        if ! validate_recorded_run_state; then
+            error_count=$((error_count + 1))
+        fi
     fi
 
     if [[ -d "skills/core" ]]; then
@@ -318,9 +1841,25 @@ status_project() {
     local project_skill_count=0
     local run_count=0
     local discovery="unavailable"
+    local configured="unknown"
+    local parallelism="unknown"
+    local maximum="unknown"
+    local fallback="unknown"
+    local generated_assets="unknown"
+    local codex_agents=0
+    local claude_agents=0
+    local cursor_agents=0
+    local codex_skills=0
+    local claude_skills=0
+    local cursor_skills=0
+    local runtime
+    local canonical_protocol="reviewed upgrade required"
 
     if [[ -f ".cyberpunk/workflow.md" && -f "agents/nexus.md" ]]; then
         status="initialized"
+    fi
+    if canonical_protocol_is_current; then
+        canonical_protocol="version 2"
     fi
 
     if [[ -d "agents" ]]; then
@@ -335,8 +1874,55 @@ status_project() {
         discovery="$(sed -n 's/^\*\*Discovery status:\*\* //p' .cyberpunk/project.md | head -n 1)"
         [[ -n "$discovery" ]] || discovery="unknown"
     fi
+    if [[ -f ".cyberpunk/config.yml" ]]; then
+        if validate_runtime_configuration .cyberpunk/config.yml >/dev/null 2>&1 &&
+            validate_model_configuration .cyberpunk/config.yml >/dev/null 2>&1; then
+            while IFS= read -r runtime; do
+                [[ -n "$runtime" ]] || continue
+                if [[ -n "$configured" && "$configured" != unknown ]]; then
+                    configured="$configured, $runtime"
+                else
+                    configured="$runtime"
+                fi
+            done < <(configured_runtimes .cyberpunk/config.yml)
+            [[ -n "$configured" ]] || configured="unknown"
+            parallelism="$(execution_setting .cyberpunk/config.yml parallelism)"
+            [[ -n "$parallelism" ]] || parallelism="unknown"
+            maximum="$(execution_setting .cyberpunk/config.yml max_concurrent_agents)"
+            [[ -n "$maximum" ]] || maximum="unknown"
+            fallback="$(model_fallback .cyberpunk/config.yml)"
+            [[ -n "$fallback" ]] || fallback="unknown"
+        fi
+        if validate_runtime_configuration .cyberpunk/config.yml >/dev/null 2>&1 &&
+            validate_model_configuration .cyberpunk/config.yml >/dev/null 2>&1 &&
+            validate_generated_runtime_state >/dev/null 2>&1; then
+            generated_assets="synchronized"
+        else
+            generated_assets="drift detected"
+        fi
+    fi
+    if [[ "$canonical_protocol" != "version 2" ]]; then
+        generated_assets="upgrade required"
+    fi
+    codex_agents="$(count_files .codex/agents '*.toml')"
+    claude_agents="$(count_files .claude/agents '*.md')"
+    cursor_agents="$(count_files .cursor/agents '*.md')"
+    codex_skills="$(count_files .agents/skills 'SKILL.md')"
+    claude_skills="$(count_files .claude/skills 'SKILL.md')"
+    cursor_skills="$(count_files .cursor/skills 'SKILL.md')"
 
     echo "Status: $status"
+    echo "Canonical protocol: $canonical_protocol"
+    if [[ "$canonical_protocol" != "version 2" ]]; then
+        echo "Canonical protocol action: review and reconcile version-2 workflow, roles, and skills before sync"
+    fi
+    echo "Configured runtimes: $configured"
+    echo "Parallelism: $parallelism"
+    echo "Maximum concurrent subagents: $maximum"
+    echo "Model fallback: $fallback"
+    echo "Native agents: codex=$codex_agents claude=$claude_agents cursor=$cursor_agents"
+    echo "Native skills: codex=$codex_skills claude=$claude_skills cursor=$cursor_skills"
+    echo "Generated assets: $generated_assets"
     echo "Project discovery: $discovery"
     echo "Agents: $agent_count"
     echo "Core skills: $core_skill_count"
@@ -344,7 +1930,17 @@ status_project() {
     echo "Active local runs: $run_count"
 }
 
-parse_init_options() {
+reset_options() {
+    DRY_RUN=false
+    FORCE=false
+    REQUESTED_RUNTIMES=()
+}
+
+parse_command_options() {
+    local command="$1"
+    local allow_runtime="$2"
+    shift 2
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run)
@@ -353,18 +1949,40 @@ parse_init_options() {
             --force)
                 FORCE=true
                 ;;
+            --runtime)
+                if [[ "$allow_runtime" != true ]]; then
+                    log_error "$command does not accept --runtime"
+                    show_usage
+                    exit 1
+                fi
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    log_error "--runtime requires a value"
+                    show_usage
+                    exit 1
+                fi
+                REQUESTED_RUNTIMES+=("$2")
+                shift
+                ;;
             -h|--help)
                 show_usage
                 exit 0
                 ;;
             *)
-                log_error "Unknown init option: $1"
+                log_error "Unknown $command option: $1"
                 show_usage
                 exit 1
                 ;;
         esac
         shift
     done
+
+    if [[ "$allow_runtime" == true ]]; then
+        if [[ ${#REQUESTED_RUNTIMES[@]} -gt 0 ]]; then
+            normalize_runtime_selection "${REQUESTED_RUNTIMES[@]}" >/dev/null
+        else
+            normalize_runtime_selection >/dev/null
+        fi
+    fi
 }
 
 require_no_arguments() {
@@ -377,6 +1995,8 @@ require_no_arguments() {
 }
 
 main() {
+    reset_options
+
     if [[ $# -eq 0 ]]; then
         show_usage
         exit 1
@@ -385,8 +2005,13 @@ main() {
     case "$1" in
         init)
             shift
-            parse_init_options "$@"
+            parse_command_options init true "$@"
             init_project
+            ;;
+        sync)
+            shift
+            parse_command_options sync false "$@"
+            sync_project
             ;;
         validate)
             shift
@@ -416,4 +2041,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

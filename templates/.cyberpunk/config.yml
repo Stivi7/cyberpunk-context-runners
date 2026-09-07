@@ -1,4 +1,41 @@
-version: 1
+version: 2
+
+runtimes:
+  enabled: [codex, claude, cursor]
+
+execution:
+  parallelism: auto
+  max_concurrent_agents: 3
+  unavailable_runtime_fallback: sequential
+
+models:
+  fallback: inherit
+  profiles:
+    deep:
+      codex: "gpt-5.6-sol"
+      claude: "opus"
+      cursor: "gpt-5.6-sol"
+    balanced:
+      codex: "gpt-5.6-terra"
+      claude: "sonnet"
+      cursor: "composer-2.5[]"
+    fast:
+      codex: "gpt-5.6-luna"
+      claude: "haiku"
+      cursor: "composer-2.5"
+  roles:
+    nexus: deep
+    fixer: deep
+    operator: fast
+    mind: deep
+    interrogator: deep
+    fragmenter: balanced
+    coder: balanced
+    daemon: balanced
+    neon: balanced
+    grid-master: balanced
+    gatekeeper: deep
+  overrides: {}
 
 delivery:
   default: integration-branch

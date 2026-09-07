@@ -18,7 +18,7 @@ Use for every mutating implementation job that may write repository files. The o
 
 ## Inputs
 
-Task id, slug, requested target, approved base commit, role, work unit, path ownership, dependencies, worktree root, and cleanup policy.
+Task id, slug, requested target, approved base commit, role, work unit, allowed scope, dependencies, integration contract, worktree root, runtime isolation capability, and cleanup policy.
 
 ## Procedure
 
@@ -26,12 +26,13 @@ Task id, slug, requested target, approved base commit, role, work unit, path own
 2. Refuse an implicit protected branch or unrelated branch as the integration target.
 3. Verify a project-local worktree root is ignored.
 4. Create `cyberpunk/<task-id>/<role>-<work-unit>` as the worker branch and give it a dedicated worktree.
-5. Record owner, integration branch, worker branch, worktree, base commit, dependencies, and status in local run state.
-6. Run project setup and baseline verification inside the worktree.
-7. After implementation verification, create an internal worker commit and return its SHA.
-8. Require Gatekeeper approval before integration.
-9. Merge approved workers into the integration branch in dependency order and run assembled verification.
-10. After confirmed integration, perform safe worktree cleanup and apply branch cleanup policy.
+5. Accept a native runtime worktree copy only when it preserves the recorded worker branch, base commit, allowed scope, and integration contract. Otherwise Nexus creates the Cyberpunk worktree before dispatch.
+6. Record owner, integration branch, worker branch, worktree, base commit, allowed scope, integration contract, dependencies, and status in local run state.
+7. Run project setup and baseline verification inside the worktree.
+8. After implementation verification, create an internal worker commit and return its SHA.
+9. Require Gatekeeper approval before integration.
+10. Merge approved workers into the integration branch in dependency order and run assembled verification.
+11. After confirmed integration, perform safe worktree cleanup and apply branch cleanup policy.
 
 ## Verification
 

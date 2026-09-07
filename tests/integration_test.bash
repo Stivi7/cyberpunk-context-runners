@@ -17,10 +17,124 @@ run_cli() {
     (cd "$target" && "$CYBERPUNK_BIN" "$@")
 }
 
+write_generated_fixture() {
+    local target="$1"
+    local destination="$2"
+    local source="$3"
+    local identifier="$4"
+    local content_file="$5"
+
+    write_generated_fields_fixture "$target" "$destination" "$source" "cursor" "adapter" "$identifier" "$content_file"
+}
+
+write_generated_fields_fixture() {
+    local target="$1"
+    local destination="$2"
+    local source="$3"
+    local runtime="$4"
+    local kind="$5"
+    local identifier="$6"
+    local content_file="$7"
+
+    (
+        cd "$target"
+        DRY_RUN=false
+        FORCE=false
+        source "$REPO_ROOT/lib/generated-assets.bash"
+        begin_generated_manifest ".cyberpunk/generated.yml" || exit 1
+        if ! write_generated_asset "$destination" "$source" "$runtime" "$kind" "$identifier" "$content_file"; then
+            cleanup_generated_manifest
+            exit 1
+        fi
+        finish_generated_manifest
+    )
+}
+
+reload_generated_manifest() {
+    local target="$1"
+
+    (
+        cd "$target"
+        DRY_RUN=false
+        FORCE=false
+        source "$REPO_ROOT/lib/generated-assets.bash"
+        begin_generated_manifest ".cyberpunk/generated.yml" || exit 1
+        finish_generated_manifest
+    )
+}
+
 line_count() {
     local value="$1"
     local path="$2"
     grep -Fxc "$value" "$path" || true
+}
+
+write_legacy_config() {
+    local destination="$1"
+    cat > "$destination" <<'EOF'
+version: 1
+
+delivery:
+  default: integration-branch
+  allow_push: false
+  allow_pull_requests: false
+  allow_deploy: false
+
+workflow:
+  mode: adaptive
+  levels: [quick, standard, complex]
+  repair_cycles_before_rediagnosis: 2
+  unresolved_cycles_before_escalation: 3
+  project_workflow_note: preserve-this-workflow-line
+
+git:
+  integration_branch: auto
+  branch_prefix: cyberpunk/
+  worktree_root: .worktrees
+  require_worktrees: true
+  require_non_overlapping_ownership: true
+  allow_internal_commits: true
+  merge_worker_branches: true
+  allow_protected_branch_merge: false
+  cleanup_worktrees_after_integration: true
+  cleanup_worker_branches: after-confirmation
+
+memory:
+  tracked: [.cyberpunk/project.md, .cyberpunk/memory]
+  local: .cyberpunk/runs
+  promote_only_validated_lessons: true
+  project_memory_note: preserve-this-memory-line
+
+skills:
+  core_path: skills/core
+  project_path: skills/project
+  enabled_project: []
+
+project_owned:
+  team_note: preserve-this-project-owned-line
+EOF
+}
+
+write_baseline_v1_scaffold() {
+    local target="$1"
+    local template_path
+    local destination
+
+    while IFS= read -r template_path; do
+        destination="$target/${template_path#templates/}"
+        mkdir -p "$(dirname "$destination")"
+        git -C "$REPO_ROOT" show "814011c:$template_path" > "$destination"
+    done < <(git -C "$REPO_ROOT" ls-tree -r --name-only 814011c templates)
+}
+
+section_text() {
+    local config="$1"
+    local section="$2"
+    awk -v section="$section" '
+        $0 == section ":" { printing=1 }
+        printing && /^[^[:space:]][^:]*:$/ && $0 != section ":" { exit }
+        printing { print }
+    ' "$config"
 }
 
 test_start "fresh project initializes and validates"
@@ -28,9 +142,395 @@ assert_exit 0 run_cli "$project" init
 assert_exit 0 run_cli "$project" validate
 assert_file "$project/AGENTS.md"
 assert_file "$project/CLAUDE.md"
-assert_file "$project/.cursor/rules/rules.mdc"
+assert_file "$project/.cursor/rules/cyberpunk.mdc"
+assert_file "$project/.codex/config.toml"
+assert_file "$project/.cyberpunk/generated.yml"
+assert_file "$project/.codex/agents/nexus.toml"
+assert_file "$project/.claude/agents/nexus.md"
+assert_file "$project/.cursor/agents/nexus.md"
+assert_eq 33 "$(grep -Fc '    kind: "agent"' "$project/.cyberpunk/generated.yml")" "fresh native agent manifest count"
+assert_eq 48 "$(grep -Fc '    kind: "skill"' "$project/.cyberpunk/generated.yml")" "fresh native skill manifest count"
 assert_file "$project/agents/fixer.md"
 assert_file "$project/skills/core/requirements-discovery/SKILL.md"
+
+test_start "generated native agents reinforce canonical delegation boundaries"
+for runtime_agent_root in "$project/.codex/agents" "$project/.claude/agents" "$project/.cursor/agents"; do
+    case "$runtime_agent_root" in
+        "$project/.codex/agents") nexus_agent="$(<"$runtime_agent_root/nexus.toml")" ;;
+        *) nexus_agent="$(<"$runtime_agent_root/nexus.md")" ;;
+    esac
+    assert_contains "$nexus_agent" "parent and sole Cyberpunk dispatcher" "generated Nexus dispatch ownership"
+    assert_contains "$nexus_agent" "Spawn, steer, resume, interrupt" "generated Nexus dispatch controls"
+    assert_contains "$nexus_agent" "Never ask a subagent to create sibling or nested Cyberpunk agents" "generated Nexus nested delegation boundary"
+    for role in fixer operator mind interrogator fragmenter coder daemon neon grid-master gatekeeper; do
+        case "$runtime_agent_root" in
+            "$project/.codex/agents") agent_content="$(<"$runtime_agent_root/$role.toml")" ;;
+            *) agent_content="$(<"$runtime_agent_root/$role.md")" ;;
+        esac
+        assert_contains "$agent_content" "Do not spawn, delegate, or coordinate sibling or nested Cyberpunk agents" "generated $role nested delegation boundary"
+    done
+done
+
+test_start "existing root instructions and Codex settings coexist with managed adapters"
+coexist_project="$SANDBOX_ROOT/coexist"
+mkdir -p "$coexist_project/.codex"
+printf '%s\n' '# User instructions' > "$coexist_project/AGENTS.md"
+printf '%s\n' '# Claude user instructions' > "$coexist_project/CLAUDE.md"
+printf '%s\n' '[agents]' 'enabled = false' 'max_concurrent_threads_per_session = 2' > "$coexist_project/.codex/config.toml"
+assert_exit 0 run_cli "$coexist_project" init --runtime codex --runtime cursor
+assert_contains "$(<"$coexist_project/AGENTS.md")" "# User instructions"
+assert_eq 1 "$(line_count '<!-- cyberpunk:start -->' "$coexist_project/AGENTS.md")" "AGENTS start marker count"
+assert_eq 1 "$(line_count '<!-- cyberpunk:end -->' "$coexist_project/AGENTS.md")" "AGENTS end marker count"
+assert_contains "$(<"$coexist_project/.codex/config.toml")" "enabled = false"
+assert_contains "$(<"$coexist_project/.codex/config.toml")" "max_concurrent_threads_per_session = 2"
+assert_file "$coexist_project/.cursor/rules/cyberpunk.mdc"
+assert_file "$coexist_project/.cyberpunk/generated.yml"
+assert_contains "$(<"$coexist_project/.cursor/rules/cyberpunk.mdc")" '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->'
+assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'path: ".cursor/rules/cyberpunk.mdc"'
+assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'source: ".cyberpunk/workflow.md"'
+assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'runtime: "cursor"'
+assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'kind: "adapter"'
+assert_contains "$(<"$coexist_project/.cyberpunk/generated.yml")" 'identifier: "cyberpunk"'
+grep -Eq 'sha256: "[0-9a-f]{64}"' "$coexist_project/.cyberpunk/generated.yml" || fail "manifest lacks a SHA-256 record"
+
+test_start "runtime destinations reject symlinked project parents without external mutation"
+for escaped_root in .codex .agents; do
+    escaped_name="${escaped_root#.}"
+    escaped_project="$SANDBOX_ROOT/escaped-$escaped_name-project"
+    escaped_external="$SANDBOX_ROOT/escaped-$escaped_name-external"
+    mkdir -p "$escaped_project" "$escaped_external"
+    printf '%s\n' "external-$escaped_name-sentinel" > "$escaped_external/sentinel.txt"
+    ln -s "$escaped_external" "$escaped_project/$escaped_root"
+    escaped_before="$(find "$escaped_external" -mindepth 1 -maxdepth 3 -type f -print -exec cksum {} \; | LC_ALL=C sort)"
+    capture run_cli "$escaped_project" init --runtime codex
+    assert_eq 1 "$COMMAND_STATUS"
+    assert_contains "$COMMAND_OUTPUT" "Refusing project destination through symlinked component: $escaped_root"
+    escaped_after="$(find "$escaped_external" -mindepth 1 -maxdepth 3 -type f -print -exec cksum {} \; | LC_ALL=C sort)"
+    assert_eq "$escaped_before" "$escaped_after" "$escaped_root escape mutated external content"
+done
+
+test_start "Codex settings are added without replacing unrelated tables"
+codex_table_project="$SANDBOX_ROOT/codex-table"
+mkdir -p "$codex_table_project/.codex"
+printf '%s\n' '[project]' 'name = "sentinel"' > "$codex_table_project/.codex/config.toml"
+assert_exit 0 run_cli "$codex_table_project" init --runtime codex
+assert_contains "$(<"$codex_table_project/.codex/config.toml")" 'name = "sentinel"'
+assert_eq 1 "$(line_count '[agents]' "$codex_table_project/.codex/config.toml")" "appended agents table count"
+assert_contains "$(<"$codex_table_project/.codex/config.toml")" "max_concurrent_threads_per_session = 3"
+
+test_start "Codex concurrency is inserted inside an existing agents table"
+codex_key_project="$SANDBOX_ROOT/codex-key"
+mkdir -p "$codex_key_project/.codex"
+printf '%s\n' '[agents]' 'enabled = true' 'default_model = "user-model"' 'reasoning_effort = "high"' '' '[features]' 'shell_tool = true' > "$codex_key_project/.codex/config.toml"
+assert_exit 0 run_cli "$codex_key_project" init --runtime codex
+codex_key_content="$(<"$codex_key_project/.codex/config.toml")"
+assert_contains "$codex_key_content" 'enabled = true'
+assert_contains "$codex_key_content" 'default_model = "user-model"'
+assert_contains "$codex_key_content" 'reasoning_effort = "high"'
+assert_contains "$codex_key_content" 'shell_tool = true'
+agents_key_line="$(grep -n '^max_concurrent_threads_per_session = 3$' "$codex_key_project/.codex/config.toml" | cut -d: -f1)"
+features_line="$(grep -n '^\[features\]$' "$codex_key_project/.codex/config.toml" | cut -d: -f1)"
+[[ "$agents_key_line" -lt "$features_line" ]] || fail "Codex key was not inserted inside [agents]"
+
+test_start "malformed managed markers refuse synchronization without changing user content"
+malformed_project="$SANDBOX_ROOT/malformed"
+mkdir -p "$malformed_project"
+printf '%s\n' '# Sentinel' '<!-- cyberpunk:start -->' 'old body' '<!-- cyberpunk:start -->' '<!-- cyberpunk:end -->' > "$malformed_project/AGENTS.md"
+malformed_before="$(cksum "$malformed_project/AGENTS.md")"
+capture run_cli "$malformed_project" init --runtime codex
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "managed markers"
+assert_eq "$malformed_before" "$(cksum "$malformed_project/AGENTS.md")" "malformed AGENTS content changed"
+
+test_start "reversed managed markers refuse synchronization without changing user content"
+reversed_project="$SANDBOX_ROOT/reversed"
+mkdir -p "$reversed_project"
+printf '%s\n' '# Sentinel' '<!-- cyberpunk:end -->' 'old body' '<!-- cyberpunk:start -->' > "$reversed_project/AGENTS.md"
+reversed_before="$(cksum "$reversed_project/AGENTS.md")"
+capture run_cli "$reversed_project" init --runtime codex
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "managed markers"
+assert_eq "$reversed_before" "$(cksum "$reversed_project/AGENTS.md")" "reversed AGENTS content changed"
+
+test_start "an unowned Cursor adapter collision is never overwritten"
+collision_project="$SANDBOX_ROOT/collision"
+mkdir -p "$collision_project/.cursor/rules"
+printf '%s\n' 'user-owned-cursor-rule' > "$collision_project/.cursor/rules/cyberpunk.mdc"
+collision_before="$(cksum "$collision_project/.cursor/rules/cyberpunk.mdc")"
+capture run_cli "$collision_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+assert_eq "$collision_before" "$(cksum "$collision_project/.cursor/rules/cyberpunk.mdc")" "collision was overwritten"
+capture run_cli "$collision_project" init --runtime cursor --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+assert_eq "$collision_before" "$(cksum "$collision_project/.cursor/rules/cyberpunk.mdc")" "force overwrote an unowned collision"
+
+test_start "non-regular Cursor destinations are unowned collisions"
+symlink_project="$SANDBOX_ROOT/symlink-collision"
+mkdir -p "$symlink_project/.cursor/rules"
+ln -s "missing-user-target" "$symlink_project/.cursor/rules/cyberpunk.mdc"
+capture run_cli "$symlink_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+[[ -L "$symlink_project/.cursor/rules/cyberpunk.mdc" ]] || fail "dangling symlink collision was replaced"
+
+fifo_project="$SANDBOX_ROOT/fifo-collision"
+mkdir -p "$fifo_project/.cursor/rules"
+mkfifo "$fifo_project/.cursor/rules/cyberpunk.mdc"
+capture run_cli "$fifo_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+[[ -p "$fifo_project/.cursor/rules/cyberpunk.mdc" ]] || fail "FIFO collision was replaced"
+
+directory_project="$SANDBOX_ROOT/directory-collision"
+mkdir -p "$directory_project/.cursor/rules/cyberpunk.mdc"
+capture run_cli "$directory_project" init --runtime cursor
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "collision"
+assert_eq "" "$(find "$directory_project/.cursor/rules/cyberpunk.mdc" -mindepth 1 -print)" "directory collision contains a generated temp artifact"
+
+test_start "failed generated writes do not create ownership records"
+write_failure_project="$SANDBOX_ROOT/write-failure"
+mkdir -p "$write_failure_project/.cursor/rules"
+chmod 500 "$write_failure_project/.cursor/rules"
+capture run_cli "$write_failure_project" init --runtime cursor
+chmod 700 "$write_failure_project/.cursor/rules"
+assert_eq 1 "$COMMAND_STATUS"
+[[ ! -e "$write_failure_project/.cyberpunk/generated.yml" ]] || fail "failed asset write committed an ownership manifest"
+assert_eq "" "$(find "$write_failure_project/.cursor/rules" -maxdepth 1 -name '.cyberpunk.mdc.tmp.*' -print)" "failed asset write left a sibling temp file"
+
+test_start "Codex settings accept commented agents and array-table boundaries"
+toml_project="$SANDBOX_ROOT/toml-headers"
+mkdir -p "$toml_project/.codex"
+printf '%s\n' \
+    '[agents] # user policy' \
+    'enabled = false' \
+    'default_model = "user-model"' \
+    '[[agents.pool]] # user pool' \
+    'name = "primary"' > "$toml_project/.codex/config.toml"
+assert_exit 0 run_cli "$toml_project" init --runtime codex
+toml_content="$(<"$toml_project/.codex/config.toml")"
+assert_eq 1 "$(grep -Ec '^[[:space:]]*\[agents\]' "$toml_project/.codex/config.toml")" "commented agents table was duplicated"
+assert_contains "$toml_content" 'enabled = false'
+assert_contains "$toml_content" 'default_model = "user-model"'
+concurrency_line="$(grep -n '^max_concurrent_threads_per_session = 3$' "$toml_project/.codex/config.toml" | cut -d: -f1)"
+array_table_line="$(grep -n '^\[\[agents.pool\]\]' "$toml_project/.codex/config.toml" | cut -d: -f1)"
+[[ "$concurrency_line" -lt "$array_table_line" ]] || fail "Codex concurrency was inserted inside an array table"
+
+test_start "malformed and unsupported generated manifests fail before synchronization writes"
+malformed_manifest_project="$SANDBOX_ROOT/malformed-manifest"
+mkdir -p "$malformed_manifest_project"
+assert_exit 0 run_cli "$malformed_manifest_project" init --runtime cursor
+printf '%s\n' 'garbage: true' > "$malformed_manifest_project/.cyberpunk/generated.yml"
+cursor_before_malformed="$(cksum "$malformed_manifest_project/.cursor/rules/cyberpunk.mdc")"
+capture run_cli "$malformed_manifest_project" sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Malformed generated asset manifest"
+assert_eq "$cursor_before_malformed" "$(cksum "$malformed_manifest_project/.cursor/rules/cyberpunk.mdc")" "malformed manifest allowed an asset write"
+
+unsupported_manifest_project="$SANDBOX_ROOT/unsupported-manifest"
+mkdir -p "$unsupported_manifest_project"
+assert_exit 0 run_cli "$unsupported_manifest_project" init --runtime cursor
+printf '%s\n' 'version: 2' 'assets: []' > "$unsupported_manifest_project/.cyberpunk/generated.yml"
+cursor_before_unsupported="$(cksum "$unsupported_manifest_project/.cursor/rules/cyberpunk.mdc")"
+capture run_cli "$unsupported_manifest_project" sync --force
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Unsupported generated asset manifest version"
+assert_eq "$cursor_before_unsupported" "$(cksum "$unsupported_manifest_project/.cursor/rules/cyberpunk.mdc")" "unsupported manifest allowed an asset write"
+
+test_start "generated manifest rendering round-trips escaped fields"
+roundtrip_project="$SANDBOX_ROOT/manifest-roundtrip"
+mkdir -p "$roundtrip_project"
+roundtrip_content="$roundtrip_project/content.mdc"
+printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->' 'escaped fixture' > "$roundtrip_content"
+roundtrip_destination='.cursor/rules/quoted"asset\fixture.mdc'
+roundtrip_source='canonical/quoted"source\fixture.md'
+roundtrip_identifier='quoted"identifier\fixture'
+assert_exit 0 write_generated_fixture "$roundtrip_project" "$roundtrip_destination" "$roundtrip_source" "$roundtrip_identifier" "$roundtrip_content"
+roundtrip_manifest_before="$(cksum "$roundtrip_project/.cyberpunk/generated.yml")"
+assert_exit 0 reload_generated_manifest "$roundtrip_project"
+assert_eq "$roundtrip_manifest_before" "$(cksum "$roundtrip_project/.cyberpunk/generated.yml")" "escaped manifest fields did not round-trip"
+assert_exit 0 write_generated_fixture "$roundtrip_project" "$roundtrip_destination" "$roundtrip_source" "$roundtrip_identifier" "$roundtrip_content"
+assert_eq "$roundtrip_manifest_before" "$(cksum "$roundtrip_project/.cyberpunk/generated.yml")" "escaped ownership lookup was not stable on a second write"
+assert_contains "$(<"$roundtrip_project/.cyberpunk/generated.yml")" 'quoted\"asset\\fixture.mdc'
+
+test_start "generated manifest fields reject raw tab CR and LF bytes"
+delimiter_names=(tab cr lf)
+delimiter_values=($'\t' $'\r' $'\n')
+manifest_field_names=(path source runtime kind identifier)
+for delimiter_index in "${!delimiter_names[@]}"; do
+    delimiter_name="${delimiter_names[$delimiter_index]}"
+    delimiter_value="${delimiter_values[$delimiter_index]}"
+    for manifest_field in "${manifest_field_names[@]}"; do
+        delimiter_project="$SANDBOX_ROOT/delimiter-$delimiter_name-$manifest_field"
+        mkdir -p "$delimiter_project"
+        delimiter_content="$delimiter_project/content.mdc"
+        printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->' 'delimiter fixture' > "$delimiter_content"
+        delimiter_destination=".cursor/rules/delimiter-$delimiter_name-$manifest_field.mdc"
+        delimiter_source="canonical/source.md"
+        delimiter_runtime="cursor"
+        delimiter_kind="adapter"
+        delimiter_identifier="delimiter-$delimiter_name-$manifest_field"
+        case "$manifest_field" in
+            path) delimiter_destination="${delimiter_destination}${delimiter_value}unsafe" ;;
+            source) delimiter_source="${delimiter_source}${delimiter_value}unsafe" ;;
+            runtime) delimiter_runtime="${delimiter_runtime}${delimiter_value}unsafe" ;;
+            kind) delimiter_kind="${delimiter_kind}${delimiter_value}unsafe" ;;
+            identifier) delimiter_identifier="${delimiter_identifier}${delimiter_value}unsafe" ;;
+        esac
+        capture write_generated_fields_fixture \
+            "$delimiter_project" \
+            "$delimiter_destination" \
+            "$delimiter_source" \
+            "$delimiter_runtime" \
+            "$delimiter_kind" \
+            "$delimiter_identifier" \
+            "$delimiter_content"
+        assert_eq 1 "$COMMAND_STATUS"
+        assert_contains "$COMMAND_OUTPUT" "Invalid generated manifest field"
+        [[ ! -e "$delimiter_project/$delimiter_destination" && ! -L "$delimiter_project/$delimiter_destination" ]] || fail "invalid $manifest_field $delimiter_name field created an asset"
+        [[ ! -e "$delimiter_project/.cyberpunk/generated.yml" ]] || fail "invalid $manifest_field $delimiter_name field created a manifest"
+    done
+done
+
+test_start "generated writers do not follow predictable sibling temp symlinks"
+temp_attack_project="$SANDBOX_ROOT/temp-symlink"
+mkdir -p "$temp_attack_project/.cursor/rules" "$temp_attack_project/.cyberpunk"
+temp_attack_content="$temp_attack_project/content.mdc"
+printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->' 'safe generated content' > "$temp_attack_content"
+printf '%s\n' 'asset-temp-user-sentinel' > "$temp_attack_project/asset-user.txt"
+printf '%s\n' 'manifest-temp-user-sentinel' > "$temp_attack_project/manifest-user.txt"
+ln -s "$temp_attack_project/asset-user.txt" "$temp_attack_project/.cursor/rules/.cyberpunk.mdc.tmp.$$"
+ln -s "$temp_attack_project/manifest-user.txt" "$temp_attack_project/.cyberpunk/.generated.yml.tmp.$$"
+assert_exit 0 write_generated_fixture "$temp_attack_project" ".cursor/rules/cyberpunk.mdc" ".cyberpunk/workflow.md" "cyberpunk" "$temp_attack_content"
+assert_eq "asset-temp-user-sentinel" "$(<"$temp_attack_project/asset-user.txt")" "asset temp symlink target was overwritten"
+assert_eq "manifest-temp-user-sentinel" "$(<"$temp_attack_project/manifest-user.txt")" "manifest temp symlink target was overwritten"
+[[ -f "$temp_attack_project/.cursor/rules/cyberpunk.mdc" && ! -L "$temp_attack_project/.cursor/rules/cyberpunk.mdc" ]] || fail "generated destination is not a regular file"
+
+test_start "generated manifest work directories are cleaned on interruption"
+interruption_project="$SANDBOX_ROOT/interruption-cleanup"
+mkdir -p "$interruption_project"
+interruption_ready="$interruption_project/ready"
+bash -c '
+    set -euo pipefail
+    cd "$1"
+    source "$2"
+    begin_generated_manifest ".cyberpunk/generated.yml"
+    printf "%s\n" "$GENERATED_MANIFEST_WORKDIR" > "$3"
+    while :; do :; done
+' _ "$interruption_project" "$REPO_ROOT/lib/generated-assets.bash" "$interruption_ready" &
+interruption_pid=$!
+interruption_attempt=0
+while [[ ! -s "$interruption_ready" && "$interruption_attempt" -lt 100 ]]; do
+    sleep 0.05
+    interruption_attempt=$((interruption_attempt + 1))
+done
+[[ -s "$interruption_ready" ]] || fail "interruption fixture did not start"
+interrupted_workdir="$(<"$interruption_ready")"
+kill -TERM "$interruption_pid"
+set +e
+wait "$interruption_pid"
+interruption_status=$?
+set -e
+[[ "$interruption_status" -ne 0 ]] || fail "interrupted manifest process exited successfully"
+[[ ! -e "$interrupted_workdir" ]] || fail "interrupted manifest process left work directory: $interrupted_workdir"
+
+test_start "generated Cursor drift is preserved unless force is requested"
+cursor_rule="$coexist_project/.cursor/rules/cyberpunk.mdc"
+manifest="$coexist_project/.cyberpunk/generated.yml"
+mkdir -p "$coexist_project/.cursor/rules"
+printf '%s\n' '<!-- Generated by Cyberpunk. Canonical source is recorded in .cyberpunk/generated.yml. -->' 'untouched generated adapter' > "$coexist_project/.cursor/rules/untouched.mdc"
+if command -v shasum >/dev/null 2>&1; then
+    untouched_hash="$(shasum -a 256 "$coexist_project/.cursor/rules/untouched.mdc" | awk '{ print $1 }')"
+else
+    untouched_hash="$(sha256sum "$coexist_project/.cursor/rules/untouched.mdc" | awk '{ print $1 }')"
+fi
+printf '%s\n' \
+    '  - path: ".cursor/rules/untouched.mdc"' \
+    '    source: ".cyberpunk/workflow.md"' \
+    '    runtime: "cursor"' \
+    '    kind: "adapter"' \
+    '    identifier: "untouched"' \
+    "    sha256: \"$untouched_hash\"" >> "$manifest"
+assert_exit 0 run_cli "$coexist_project" sync
+assert_contains "$(<"$manifest")" 'path: ".cursor/rules/untouched.mdc"' "sync abandoned an untouched ownership record"
+printf '%s\n' 'local-cursor-edit' >> "$cursor_rule"
+drift_before="$(cksum "$cursor_rule")"
+manifest_before_drift="$(cksum "$manifest")"
+capture bash -c 'source "$1"; validate_generated_manifest "$2"' _ "$REPO_ROOT/lib/generated-assets.bash" "$manifest"
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Stale generated asset hash"
+capture run_cli "$coexist_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "drift"
+assert_eq "$drift_before" "$(cksum "$cursor_rule")" "non-force sync changed drifted Cursor rule"
+assert_eq "$manifest_before_drift" "$(cksum "$manifest")" "failed sync changed ownership manifest"
+assert_exit 0 run_cli "$coexist_project" sync --force
+assert_not_contains "$(<"$cursor_rule")" "local-cursor-edit"
+
+test_start "managed roots and ownership manifest are stable across repeated sync"
+agents_before_sync="$(cksum "$coexist_project/AGENTS.md")"
+claude_before_sync="$(cksum "$coexist_project/CLAUDE.md")"
+manifest_before_sync="$(cksum "$manifest")"
+assert_exit 0 run_cli "$coexist_project" sync
+assert_exit 0 run_cli "$coexist_project" sync
+assert_eq "$agents_before_sync" "$(cksum "$coexist_project/AGENTS.md")" "AGENTS managed block was not stable"
+assert_eq "$claude_before_sync" "$(cksum "$coexist_project/CLAUDE.md")" "CLAUDE content changed for a disabled runtime"
+assert_eq "$manifest_before_sync" "$(cksum "$manifest")" "generated manifest was not stable"
+
+test_start "sync migrates a legacy configuration without changing existing policy"
+legacy_project="$SANDBOX_ROOT/legacy"
+mkdir -p "$legacy_project"
+assert_exit 0 run_cli "$legacy_project" init
+write_legacy_config "$legacy_project/.cyberpunk/config.yml"
+legacy_delivery_before="$(section_text "$legacy_project/.cyberpunk/config.yml" delivery)"
+legacy_workflow_before="$(section_text "$legacy_project/.cyberpunk/config.yml" workflow)"
+legacy_git_before="$(section_text "$legacy_project/.cyberpunk/config.yml" git)"
+legacy_memory_before="$(section_text "$legacy_project/.cyberpunk/config.yml" memory)"
+legacy_skills_before="$(section_text "$legacy_project/.cyberpunk/config.yml" skills)"
+legacy_project_owned_before="$(section_text "$legacy_project/.cyberpunk/config.yml" project_owned)"
+assert_exit 0 run_cli "$legacy_project" sync
+legacy_config="$legacy_project/.cyberpunk/config.yml"
+assert_contains "$(<"$legacy_config")" "version: 2"
+for value in "runtimes:" "execution:" "models:"; do
+    assert_contains "$(<"$legacy_config")" "$value" "legacy migration"
+done
+assert_eq "$legacy_delivery_before" "$(section_text "$legacy_config" delivery)" "delivery policy changed during migration"
+assert_eq "$legacy_workflow_before" "$(section_text "$legacy_config" workflow)" "workflow policy changed during migration"
+assert_eq "$legacy_git_before" "$(section_text "$legacy_config" git)" "git policy changed during migration"
+assert_eq "$legacy_memory_before" "$(section_text "$legacy_config" memory)" "memory policy changed during migration"
+assert_eq "$legacy_skills_before" "$(section_text "$legacy_config" skills)" "skills policy changed during migration"
+assert_eq "$legacy_project_owned_before" "$(section_text "$legacy_config" project_owned)" "project-owned policy changed during migration"
+legacy_checksum_before="$(cksum "$legacy_config")"
+assert_exit 0 run_cli "$legacy_project" sync
+legacy_checksum_after="$(cksum "$legacy_config")"
+assert_eq "$legacy_checksum_before" "$legacy_checksum_after" "sync migration was not stable"
+
+test_start "complete baseline v1 scaffold requires a reviewed canonical protocol upgrade"
+baseline_v1_project="$SANDBOX_ROOT/baseline-v1"
+mkdir -p "$baseline_v1_project"
+write_baseline_v1_scaffold "$baseline_v1_project"
+baseline_workflow_before="$(cksum "$baseline_v1_project/.cyberpunk/workflow.md")"
+baseline_roles_before="$(find "$baseline_v1_project/agents" -type f -name '*.md' -exec cksum {} \; | LC_ALL=C sort)"
+baseline_skills_before="$(find "$baseline_v1_project/skills" -type f -name 'SKILL.md' -exec cksum {} \; | LC_ALL=C sort)"
+baseline_config_before="$(cksum "$baseline_v1_project/.cyberpunk/config.yml")"
+capture run_cli "$baseline_v1_project" sync
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol upgrade required"
+assert_contains "$COMMAND_OUTPUT" "review the canonical workflow, roles, and skills"
+assert_eq "$baseline_workflow_before" "$(cksum "$baseline_v1_project/.cyberpunk/workflow.md")" "legacy workflow changed before review"
+assert_eq "$baseline_roles_before" "$(find "$baseline_v1_project/agents" -type f -name '*.md' -exec cksum {} \; | LC_ALL=C sort)" "legacy roles changed before review"
+assert_eq "$baseline_skills_before" "$(find "$baseline_v1_project/skills" -type f -name 'SKILL.md' -exec cksum {} \; | LC_ALL=C sort)" "legacy skills changed before review"
+assert_eq "$baseline_config_before" "$(cksum "$baseline_v1_project/.cyberpunk/config.yml")" "legacy config migrated before canonical review"
+[[ ! -e "$baseline_v1_project/.cyberpunk/generated.yml" ]] || fail "legacy scaffold claimed v2 generated readiness"
+capture run_cli "$baseline_v1_project" validate
+assert_eq 1 "$COMMAND_STATUS"
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol upgrade required"
+assert_exit 0 run_cli "$baseline_v1_project" status
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol: reviewed upgrade required"
+assert_contains "$COMMAND_OUTPUT" "Canonical protocol action: review and reconcile version-2 workflow, roles, and skills before sync"
+assert_contains "$COMMAND_OUTPUT" "Generated assets: upgrade required"
 
 test_start "every agent default skill resolves"
 for agent_file in "$project"/agents/*.md; do
