@@ -17,7 +17,8 @@ The CLI copies this tree into a target project. Canonical policy lives under `.c
 - `agents/` — role contracts, including The Fixer for product discovery and The Nexus for engineering delivery
 - `skills/core/` — portable framework skills, including `requirements-discovery`
 - `skills/project/` — explicitly enabled project skills
-- `specs/`, `plans/`, and `tasks/` — durable artifacts; Fixer PRDs use `specs/YYYY-MM-DD-<topic>-prd.md`
+- `specs/` — approved requirements; Fixer PRDs use `specs/YYYY-MM-DD-<topic>-prd.md`
+- `.cyberpunk/runs/` — local execution plans, work packets, and evidence
 - `AGENTS.md`, `CLAUDE.md`, and Cursor rules — thin runtime adapters
 
 ## Runtime Registrations
