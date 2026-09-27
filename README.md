@@ -6,14 +6,73 @@ Cyberpunk Context Runners is a runtime-neutral engineering-team protocol. Its ca
 
 ## Quick Start
 
-Download or clone this repository, make the `cyberpunk` script available on your path, then initialize it inside a project. Plain `init` enables Codex, Claude Code, and Cursor registrations together:
+Install the `v0.4.0` tagged archive into a user-owned release directory. The
+`cyberpunk` script must remain beside its `lib/` and `templates/` directories,
+so do not move the script out of the extracted release.
 
 ```bash
-cd /path/to/your/project
+(
+set -eu
+
+CLI_TAG="v0.4.0"
+INSTALL_ROOT="$HOME/.local/share/cyberpunk-context-runners"
+RELEASE_DIR="$INSTALL_ROOT/releases/$CLI_TAG"
+DOWNLOAD_DIR="$(mktemp -d)"
+ARCHIVE="$DOWNLOAD_DIR/cyberpunk-context-runners.tar.gz"
+
+if [ -e "$RELEASE_DIR" ] || [ -L "$RELEASE_DIR" ]; then
+  printf 'Release directory already exists: %s\n' "$RELEASE_DIR" >&2
+  exit 1
+fi
+if [ -e "$INSTALL_ROOT/current" ] && [ ! -L "$INSTALL_ROOT/current" ]; then
+  printf 'Refusing non-symlink current path: %s\n' "$INSTALL_ROOT/current" >&2
+  exit 1
+fi
+
+curl --fail --location --output "$ARCHIVE" \
+  "https://github.com/Stivi7/cyberpunk-context-runners/archive/refs/tags/$CLI_TAG.tar.gz"
+tar -tzf "$ARCHIVE" >/dev/null
+mkdir -p "$RELEASE_DIR"
+tar -xzf "$ARCHIVE" --strip-components=1 -C "$RELEASE_DIR"
+test -x "$RELEASE_DIR/cyberpunk"
+ln -sfn "$RELEASE_DIR" "$INSTALL_ROOT/current"
+test -x "$INSTALL_ROOT/current/cyberpunk"
+rm -f "$ARCHIVE"
+rmdir "$DOWNLOAD_DIR"
+)
+```
+
+Let an active `cyberpunk` command finish before repointing `current`; this
+portable single-user switch is reversible, not an atomic multi-user operation.
+
+Add the release selector to your `PATH`; this needs no `sudo`:
+
+```bash
+export PATH="$HOME/.local/share/cyberpunk-context-runners/current:$PATH"
+```
+
+Put that line in `~/.zshrc` for zsh, or `~/.bashrc` for interactive Bash
+(`~/.bash_profile`, or `~/.profile` when no Bash profile exists, for macOS
+login Bash). Start a new shell or reload the file, then use `rehash` in zsh or
+`hash -r` in Bash. Confirm the selected CLI and initialize a project:
+
+```bash
+type -a cyberpunk
+command -v cyberpunk
+cyberpunk --version
+
+mkdir cyberpunk-example
+cd cyberpunk-example
+git init
 cyberpunk init
 cyberpunk validate
 cyberpunk status
 ```
+
+For full installation, upgrade, troubleshooting, and contributor guidance,
+visit the [Cyberpunk Context Runners documentation](https://stivi7.github.io/ccr/)
+and its [contributing guide](https://stivi7.github.io/ccr/contributing/).
+See [LICENSE](LICENSE) for license terms.
 
 To register only the runtimes used by a project, choose one or more explicit runtimes. Re-running `init` adds selected runtimes; it does not remove existing registrations.
 
