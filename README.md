@@ -208,8 +208,6 @@ skills/
 ├── core/
 └── project/               # user-owned
 specs/
-plans/
-tasks/
 AGENTS.md
 CLAUDE.md
 .codex/
